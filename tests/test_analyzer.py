@@ -36,7 +36,7 @@ class TestAudioAnalyzer(unittest.TestCase):
         # フィルターが呼ばれたか
         mock_filter.apply.assert_called_once_with({"target": dummy_signal})
         # strategy にはフィルター処理後の filtered_signal が渡されたか
-        mock_strategy.analyze.assert_called_once_with({"target": filtered_signal}, None)
+        mock_strategy.analyze.assert_called_once_with({"target": filtered_signal}, {})
         mock_writer.write.assert_called_once_with("output.json", dummy_result)
         
         # モックの呼び出し履歴をリセット

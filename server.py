@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # コア解析コンポーネントのインポート
 from analyzer.AudioAnalyzer import AudioAnalyzer
+from analyzer.IAnalysisStrategy import IAnalysisStrategy
 from analyzer.strategy.SimpleBeatStrategy import SimpleBeatStrategy
 from analyzer.strategy.GenreClassificationStrategy import GenreClassificationStrategy
 from analyzer.strategy.KeyDetectionStrategy import KeyDetectionStrategy
@@ -51,19 +52,12 @@ app.add_middleware(
 )
 
 class InMemoryResultWriter(IResultWriter):
-    """結果をメモリ上に一時保存するためのインメモリライター"""
+    """process_multi の結果をメモリ上で受け取るためのライター"""
     def __init__(self):
-        self.result = {"status": "success"}
+        self.result: Dict[str, Any] = {"status": "success"}
 
     def write(self, filepath: str, result: Dict[str, Any]) -> None:
-        for k, v in result.items():
-            if k == "status":
-                if v == "error":
-                    self.result["status"] = "error"
-            elif k == "message":
-                self.result["message"] = (self.result.get("message", "") + "; " + v).strip("; ")
-            else:
-                self.result[k] = v
+        self.result.update(result)
 
 @app.get("/", response_class=HTMLResponse)
 def read_index():
@@ -91,12 +85,12 @@ async def analyze_audio(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save temporary upload: {e}")
 
-    # 3. AudioAnalyzerでフル解析を実行
+    # 3. AudioAnalyzerでフル解析を一括実行 (読込・Demucs分離は1回のみ)
     try:
         reader = LibrosaAudioReader()
         mem_writer = InMemoryResultWriter()
         
-        # 音源分離およびドラムアタック強調前処理
+        # 音源分離およびドラムアタック強調前処理フィルター
         filters: List[IAudioFilter] = [
             SourceSeparatorFilter(target_key="target"),
             BandSplitterFilter(target_key="target_drums", cutoff_hz=150.0),
@@ -107,8 +101,8 @@ async def analyze_audio(file: UploadFile = File(...)):
         
         input_paths = {"target": temp_path}
         
-        # 全ての解析戦略を解決
-        strategies = [
+        # 全ての解析戦略を一括実行 (process_multi で読込・分離が1回のみ)
+        strategies: List[IAnalysisStrategy] = [
             SimpleBeatStrategy(),
             KeyDetectionStrategy(),
             ChordEstimationStrategy(),
@@ -116,9 +110,7 @@ async def analyze_audio(file: UploadFile = File(...)):
             GenreClassificationStrategy()
         ]
         
-        for strategy in strategies:
-            analyzer.set_strategy(strategy)
-            analyzer.process(input_paths, "dummy_path", params={})
+        analyzer.process_multi(input_paths, strategies, "dummy_path")
             
         result_data = dict(mem_writer.result)
         result_data["audio_url"] = f"/api/audio/{unique_filename}"

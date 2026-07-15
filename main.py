@@ -1,8 +1,9 @@
 import argparse
 import sys
-from typing import Dict, Any, List, Optional
+from typing import List, Optional
 
 from analyzer.AudioAnalyzer import AudioAnalyzer
+from analyzer.IAnalysisStrategy import IAnalysisStrategy
 from analyzer.strategy.SimpleBeatStrategy import SimpleBeatStrategy
 from analyzer.strategy.SlidingWindowBeatStrategy import SlidingWindowBeatStrategy
 from analyzer.strategy.GenreClassificationStrategy import GenreClassificationStrategy
@@ -12,29 +13,12 @@ from analyzer.strategy.ChordEstimationStrategy import ChordEstimationStrategy
 from analyzer.strategy.ChorusDetectionStrategy import ChorusDetectionStrategy
 from reader.LibrosaAudioReader import LibrosaAudioReader
 from writer.JsonResultWriter import JsonResultWriter
-from writer.IResultWriter import IResultWriter
 
 # フィルターのインポート
 from analyzer.filter.IAudioFilter import IAudioFilter
 from analyzer.filter.BandSplitterFilter import BandSplitterFilter
 from analyzer.filter.CompressorFilter import CompressorFilter
 from analyzer.filter.SourceSeparatorFilter import SourceSeparatorFilter
-
-class InMemoryResultWriter(IResultWriter):
-    """複数戦略の結果をメモリ上にマージして一時保存するためのライター"""
-    def __init__(self):
-        self.result = {"status": "success"}
-
-    def write(self, filepath: str, result: Dict[str, Any]) -> None:
-        # status キーは全体の成否にするため個別にマージ
-        for k, v in result.items():
-            if k == "status":
-                if v == "error":
-                    self.result["status"] = "error"
-            elif k == "message":
-                self.result["message"] = (self.result.get("message", "") + "; " + v).strip("; ")
-            else:
-                self.result[k] = v
 
 def main(cli_args: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
@@ -60,7 +44,6 @@ def main(cli_args: Optional[List[str]] = None) -> None:
     # インフラ層のセットアップ
     reader = LibrosaAudioReader()
     file_writer = JsonResultWriter()
-    mem_writer = InMemoryResultWriter()
 
     # フィルターチェーンの構築
     filters: List[IAudioFilter] = []
@@ -82,16 +65,14 @@ def main(cli_args: Optional[List[str]] = None) -> None:
         "genre": GenreClassificationStrategy,
     }
 
-    selected_keys = args.strategies
+    selected_keys = list(args.strategies)
     if "all" in selected_keys:
         # similarity 以外のすべてを有効化
         selected_keys = ["beat", "key", "chord", "chorus", "genre"]
 
-    # 重複排除
-    selected_keys = list(set(selected_keys))
-
-    # 解析器の初期化 (デフォルトでSimpleBeatStrategyを設定)
-    analyzer = AudioAnalyzer(reader, mem_writer, SimpleBeatStrategy(), filters=filters)
+    # 重複排除（順序保持）
+    seen: set = set()
+    selected_keys = [k for k in selected_keys if not (k in seen or seen.add(k))]
 
     input_paths = {"target": args.input}
 
@@ -102,26 +83,26 @@ def main(cli_args: Optional[List[str]] = None) -> None:
             sys.exit(1)
         input_paths["reference"] = args.reference
 
-    # 各解析の順次実行とメモリ上へのマージ
+    # 実行する戦略リストを構築
+    strategies: List[IAnalysisStrategy] = []
     for key in selected_keys:
         if key == "similarity":
-            strategy = AudioSimilarityStrategy()
+            strategies.append(AudioSimilarityStrategy())
         else:
-            strategy = strategy_mapping[key]()
+            strategies.append(strategy_mapping[key]())
 
-        print(f"\n>>> 解析実行中: {key} (戦略: {strategy.__class__.__name__})")
-        analyzer.set_strategy(strategy)
-        try:
-            analyzer.process(input_paths, "dummy_output", params={})
-        except Exception as e:
-            print(f"Error: 解析 {key} の実行中にエラーが発生しました: {e}", file=sys.stderr)
-            mem_writer.result["status"] = "error"
-            mem_writer.result["message"] = (mem_writer.result.get("message", "") + f"; {key}: {str(e)}").strip("; ")
+    # 解析器の初期化
+    analyzer = AudioAnalyzer(reader, file_writer, SimpleBeatStrategy(), filters=filters)
 
-    # 最終的な結果をファイルに保存
-    print(f"\n>>> すべての解析結果を {args.output} に書き出しています...")
-    file_writer.write(args.output, mem_writer.result)
-    print(">>> 完了しました。")
+    # 一括実行 (読込・フィルタが1回のみ走る)
+    print(f"\n>>> 解析を一括実行中: {selected_keys}")
+    try:
+        analyzer.process_multi(input_paths, strategies, args.output)
+    except Exception as e:
+        print(f"Error: 解析の実行中にエラーが発生しました: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"\n>>> 解析結果を {args.output} に書き出しました。")
 
 if __name__ == "__main__":
     main()
