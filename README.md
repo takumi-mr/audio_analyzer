@@ -1,114 +1,48 @@
-# Audio Analyzer (音声解析システム)
+# Audio Analyzer (高精度音声解析ツール)
 
-本プロジェクトは、音声ファイルの読み込み、前処理（フィルタリング）、および各種解析（BPM検出、類似度計算、ジャンル判定）を行うための高精度な音声解析システムです。
-DI（依存性の注入）パターン、Strategy（戦略）パターン、および Filter Pipeline（前処理フィルタ）パターンを組み合わせた、クリーンで拡張性の高いアーキテクチャを採用しています。
-
----
-
-## 🛠️ 技術スタック & 主な依存関係
-
-- **言語**: Python 3.9+
-- **音声処理コア**: `librosa` (v0.11.0+)
-- **数値計算・科学技術計算**: `numpy`, `scipy`
-- **音声入出力デコーダ**: `soundfile` (WAV高速デコード), `audioread` (MP3, OGGなどの汎用デコード)
+本ツールは、市販の楽曲や音声ファイルを読み込み、AI音源分離と多様な音声分析技術を組み合わせて、**BPM（テンポ）検出、キー（調）推定、コード（和音）進行特定、サビ（Chorus）自動検出、曲の類似度判定、音楽ジャンル推定**を一括で行うことができる音声解析エンジンです。
 
 ---
 
-## 🏗️ アーキテクチャ設計
+## 🌟 主な機能と特徴
 
-システムは主に以下の4つのモジュールで構成され、疎結合になるようインターフェースを介して構築されています。
+### 1. AI音源分離 & フィルターパイプライン (前処理)
+正確な解析を行うため、解析の前に以下の前処理を実行してドラムやボーカルを抽出します。
+- **Demucs音源分離**: Meta社開発のAI分離技術 `Demucs` を使用し、音声を「ボーカル」「ドラム」「ベース」「その他」の4つに完全に分離。
+- **ドラム強調処理**: 分離したドラムトラックからキック音（低音域）のみを抽出し、さらにコンプレッサーをかけてビートのアタックを最大化します。これらを優先的にBPM検出へ引き渡すことで、テンポ判定のブレを徹底的に防ぎます。
 
-```mermaid
-graph TD
-    A[AudioReader] -->|AudioSignal| B[AudioAnalyzer]
-    F[IAudioFilter Pipeline] -->|Preprocessed AudioSignals| B
-    B -->|Filtered Signals| C[IAnalysisStrategy]
-    C -->|Result Dict| B
-    B -->|Save Results| D[IResultWriter]
-```
-
-### 1. データモデル (`model/`)
-
-- **[AudioSignal](model/AudioSignal.py)**: 読み込まれた音声波形データ（`numpy`配列）とサンプリング周波数、再生時間をカプセル化した共通データ構造。
-
-### 2. 音声読み込みモジュール (`reader/`)
-
-- **`IAudioReader`**: 音声ファイルの読込インターフェース。
-- **`WavAudioReader`**: 標準 `wave` ライブラリを使用した高速WAVデコーダ。
-- **`LibrosaAudioReader`**: `librosa` を使用したMP3, WAV, OGG等に対応するマルチフォーマットデコーダ。
-
-### 3. 前処理フィルターモジュール (`analyzer/filter/`)
-
-- **`IAudioFilter`**: 辞書形式の複数音声シグナルを受け取って加工し、辞書を返す前処理インターフェース。
-- **`BandSplitterFilter`**: `scipy.signal` を用いて音声を低域（<150Hz）と高域（>=150Hz）の2つの信号に分割し、辞書に追加します（キックやベース抽出によるBPM検出の精度向上に寄与）。
-- **`CompressorFilter`**: 指定された特定のシグナルに対して音圧圧縮を適用し、ビートのアタックを際立たせます。
-- **`SourceSeparatorFilter`**: ドラムやボーカル等の音源分離処理を行う。
-
-### 4. 解析戦略モジュール (`analyzer/strategy/`)
-
-- **`IAnalysisStrategy`**: 解析アルゴリズムをカプセル化するインターフェース。
-- **`SimpleBeatStrategy`**: `librosa.beat.beat_track` を利用した高精度なBPM・テンポ検出。
-- **`SlidingWindowBeatStrategy`**: 楽曲を10秒単位の時間窓で区切り、時間経過による変拍子やテンポ遷移をトラッキング。
-- **`AudioSimilarityStrategy`**: 音色（MFCC）と音階・コード構成（Chroma CENS）の双方のコサイン類似度を別個に計算し、ハイブリッド評価を行う類似度推定。
-- **`GenreClassificationStrategy`**: BPM、明るさ（スペクトル重心）、ゼロ交差率に加え、ノイズ度（スペクトル平坦度）と高域特性（ロールオフ周波数）を組み合わせた詳細な決定木ルールに基づく音楽ジャンル判定。
-- **`KeyDetectionStrategy`**: 平均クロマ特徴量と Krumhansl-Schmuckler プロファイルの相関分析を用いた楽曲キー（調）の自動推定。
-- **`ChordEstimationStrategy`**: クロマ特徴量と主要24和音（Major/Minor）テンプレートのマッチングにより秒数ごとのコード進行を出力。
-- **`ChorusDetectionStrategy`**: 音圧（RMS）、明るさ（スペクトル重心）、およびクロマ類似度の繰り返し情報から、サビの開始・終了秒数を自動特定。
+### 2. 多角的な楽曲解析 (解析戦略)
+- **テンポ・BPM分析**: 正確なBPMを推定します。また、曲を数秒ごとにスキャンしてテンポチェンジや変拍子の位置を捉えるスライディングウィンドウ解析にも対応。
+- **主キー（調）判定**: ボーカルや旋律成分を分析し、楽曲全体のキー（例: `G Minor`, `C Major` 等）を特定。
+- **コード進行特定**: 楽曲の音階情報をフレーム単位で解析し、秒数ごとのコード推移（C, Am, F, Gなど）をタイムスパン（開始秒・終了秒）で結合して出力します。
+- **サビ（Chorus）自動特定**: 音圧の盛り上がり、音の明るさに加え、「同じメロディやコード構成が曲中で繰り返される」構造的特徴をクロマ類似度分析で捉え、サビの開始・終了秒数を自動的に特定。
+- **類似度計算・ジャンル判定**: 音色とメロディ構成を総合評価する類似度比較や、明るさ・ノイズ感によるジャンル自動推定。
 
 ---
 
-## 📂 ディレクトリ構成
+## 📂 フォルダ構成
 
 ```text
 audio_analyzer/
-├── analyzer/                  # 解析コア
-│   ├── AudioAnalyzer.py       # コンテキストクラス (パイプラインの統合)
-│   ├── IAnalysisStrategy.py   # 解析戦略インターフェース
-│   ├── filter/                # 事前処理フィルター
-│   │   ├── IAudioFilter.py
-│   │   ├── BandSplitterFilter.py
-│   │   ├── CompressorFilter.py
-│   │   └── SourceSeparatorFilter.py
-│   └── strategy/              # 各解析アルゴリズムの実装
-│       ├── SimpleBeatStrategy.py
-│       ├── SlidingWindowBeatStrategy.py
-│       ├── AudioSimilarityStrategy.py
-│       ├── GenreClassificationStrategy.py
-│       ├── KeyDetectionStrategy.py
-│       └── ChordEstimationStrategy.py
-├── model/                     # データモデル
-│   └── AudioSignal.py
-├── reader/                    # 音声デコーダ
-│   ├── IAudioReader.py
-│   ├── AudioReader.py
-│   └── LibrosaAudioReader.py
-├── writer/                    # 結果保存
-│   ├── IResultWriter.py
-│   └── JsonResultWriter.py
-├── tests/                     # 単体テストスイート
-│   ├── __init__.py
-│   ├── test_reader.py
-│   ├── test_writer.py
-│   ├── test_analyzer.py
-│   ├── test_filter.py
-│   ├── test_strategies.py
-│   ├── test_mir_phase1.py
-│   └── test_mir_phase2.py
-├── main.py                    # サンプル実行エントリポイント
-├── requirements.txt           # 依存パッケージ定義
-└── README.md                  # 本ファイル
+├── analyzer/                 # 解析コア
+│   ├── AudioAnalyzer.py      # 解析パイプラインの統合コントローラー
+│   ├── filter/               # 前処理用フィルター (Demucs音源分離、帯域分割、コンプレッサ)
+│   └── strategy/             # 各解析アルゴリズムの実装 (BPM, キー, コード, サビ, 類似度, ジャンル)
+├── model/                    # 音声データの共通オブジェクトモデル
+├── reader/                   # 音声ファイルデコーダー (WAV, MP3, OGG等対応)
+├── writer/                   # 解析結果のJSONファイル出力
+├── tests/                    # 自動単体テストスイート
+├── main.py                   # サンプル実行エントリポイント
+└── requirements.txt          # 依存ライブラリの定義
 ```
 
 ---
 
-## 🚀 セットアップ
+## 🚀 セットアップ (導入方法)
 
 1. **仮想環境の作成と有効化**:
-
    ```bash
    python -m venv .venv
-   # Windows (Command Prompt)
-   .venv\Scripts\activate.bat
    # Windows (PowerShell)
    .venv\Scripts\Activate.ps1
    # macOS / Linux
@@ -120,34 +54,72 @@ audio_analyzer/
    pip install --upgrade pip
    pip install -r requirements.txt
    ```
+   *(※ 初回の音源分離実行時のみ、Demucs AIモデルの自動ダウンロードが発生します)*
 
 ---
 
-## 💻 使用方法
+## 💻 使用方法と出力結果
 
-付属のサンプルコード `main.py` を実行することで、フィルター適用から4つの解析処理（簡易BPM、変拍子BPM、ジャンル、類似度）までの一連のパイプライン動作を検証できます。
+付属の `main.py` を実行することで、フィルター適用からすべての解析を一括で検証できます。
 
 ```bash
 python main.py
 ```
 
-### 結果ファイル
+実行が完了すると、ルートディレクトリに以下の解析結果JSONファイルが出力されます。
 
-実行すると、以下のJSON解析結果がルートディレクトリに出力されます。
+### ① `result_simple.json` (BPM解析結果)
+```json
+{
+    "status": "success",
+    "tempo_bpm": 120.0,
+    "time_signature": "4/4",
+    "confidence": 0.95
+}
+```
 
-- `result_simple.json` (BPM解析結果)
-- `result_complex.json` (時系列テンポトラッキング結果)
-- `result_genre.json` (音楽ジャンル判定・音響特徴量データ)
-- `result_similarity.json` (音色・音階ブレンド類似度)
-- `result_key.json` (キー推定結果)
-- `result_chords.json` (コード進行推定結果)
-- `result_chorus.json` (サビ区間特定結果)
+### ② `result_key.json` (キー推定結果)
+```json
+{
+    "status": "success",
+    "estimated_key": "G Minor",
+    "key_tonic": "G",
+    "key_scale": "Minor",
+    "confidence": 0.692
+}
+```
+
+### ③ `result_chords.json` (コード進行判定結果)
+楽曲全体のコード（和音）の推移を秒数付きでリスト化して出力します。
+```json
+{
+    "status": "success",
+    "chords": [
+        { "start_sec": 0.0, "end_sec": 1.25, "chord": "Em" },
+        { "start_sec": 1.25, "end_sec": 2.35, "chord": "C" },
+        { "start_sec": 2.35, "end_sec": 4.25, "chord": "G" }
+    ]
+}
+```
+
+### ④ `result_chorus.json` (サビ区間特定結果)
+最も盛り上がり、かつ繰り返し出現する「サビ」の位置を自動検出します。サビの繰り返しがある場合、複数の区間が出力されます。
+```json
+{
+    "status": "success",
+    "chorus_sections": [
+        { "start_sec": 12.5, "end_sec": 28.0 },
+        { "start_sec": 55.0, "end_sec": 70.5 }
+    ],
+    "confidence": 0.85
+}
+```
 
 ---
 
 ## 🧪 テストの実行
 
-Pythonの標準機能を用いて、すべてのクラスの単体テストを一括実行できます。
+各モジュールが正常に動作しているかを確認するテストを実行できます。
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
