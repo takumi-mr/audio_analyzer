@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Analyzer Studio</title>
+    <!-- Google Fonts Outfit & Noto Sans JP -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #070913;
+            --panel-bg: rgba(20, 24, 46, 0.45);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --neon-blue: #00e5ff;
+            --neon-purple: #bd00ff;
+            --neon-pink: #ff007f;
+            --neon-green: #39ff14;
+            --text-main: #f0f3ff;
+            --text-muted: #8c96b5;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', 'Noto Sans JP', sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(at 10% 20%, rgba(20, 10, 60, 0.5) 0px, transparent 50%),
+                radial-gradient(at 90% 80%, rgba(10, 30, 80, 0.4) 0px, transparent 50%);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+        }
+
+        header {
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid var(--border-color);
+            backdrop-filter: blur(10px);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        header h1 {
+            font-size: 1.8rem;
+            font-weight: 800;
+            background: linear-gradient(45deg, var(--neon-blue), var(--neon-purple));
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 1px;
+        }
+
+        header .subtitle {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            border: 1px solid var(--neon-blue);
+            padding: 0.2rem 0.6rem;
+            border-radius: 20px;
+            box-shadow: 0 0 10px rgba(0, 229, 255, 0.15);
+        }
+
+        main {
+            flex: 1;
+            padding: 2rem;
+            max-width: 1200px;
+            width: 100%;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        /* アップロードエリア */
+        #upload-zone {
+            border: 2px dashed rgba(0, 229, 255, 0.25);
+            background: var(--panel-bg);
+            border-radius: 16px;
+            padding: 4rem 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            backdrop-filter: blur(12px);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        #upload-zone:hover {
+            border-color: var(--neon-blue);
+            box-shadow: 0 0 25px rgba(0, 229, 255, 0.15), inset 0 0 15px rgba(0, 229, 255, 0.05);
+            transform: translateY(-2px);
+        }
+
+        #upload-zone svg {
+            width: 64px;
+            height: 64px;
+            stroke: var(--neon-blue);
+            margin-bottom: 1.5rem;
+            filter: drop-shadow(0 0 8px rgba(0, 229, 255, 0.4));
+        }
+
+        #upload-zone p {
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        #upload-zone span {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        /* ローディングインジケータ */
+        #loading-container {
+            display: none;
+            text-align: center;
+            padding: 4rem 2rem;
+            background: var(--panel-bg);
+            border-radius: 16px;
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border-color);
+        }
+
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid rgba(255, 255, 255, 0.05);
+            border-top: 4px solid var(--neon-blue);
+            border-bottom: 4px solid var(--neon-purple);
+            border-radius: 50%;
+            animation: spin 1.5s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+            margin: 0 auto 2rem;
+            box-shadow: 0 0 20px rgba(0, 229, 255, 0.2);
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-title {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 0.8rem;
+            letter-spacing: 0.5px;
+        }
+
+        .loading-msg {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+
+        /* メインプレイヤーエリア (解析後表示) */
+        #dashboard {
+            display: none;
+            flex-direction: column;
+            gap: 2rem;
+            animation: fadeIn 0.6s ease-out forwards;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* 3カラムダッシュボードカード */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .card {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(12px);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-height: 140px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--neon-blue);
+        }
+
+        .card.purple::before { background: var(--neon-purple); }
+        .card.pink::before { background: var(--neon-pink); }
+        .card.green::before { background: var(--neon-green); }
+
+        .card-label {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        .card-value {
+            font-size: 2.2rem;
+            font-weight: 800;
+            color: var(--text-main);
+            line-height: 1.2;
+        }
+
+        .card-subvalue {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            margin-top: 0.3rem;
+        }
+
+        /* サビインジケータ用特別演出 */
+        #chorus-panel {
+            transition: all 0.3s ease;
+        }
+
+        #chorus-panel.active {
+            box-shadow: 0 0 30px rgba(255, 0, 127, 0.25);
+            border-color: rgba(255, 0, 127, 0.4);
+            background: rgba(255, 0, 127, 0.05);
+        }
+
+        #chorus-panel.active .card-value {
+            color: var(--neon-pink);
+            text-shadow: 0 0 10px rgba(255, 0, 127, 0.8);
+            animation: flame-pulse 1s infinite alternate;
+        }
+
+        @keyframes flame-pulse {
+            from { transform: scale(1); }
+            to { transform: scale(1.05); }
+        }
+
+        /* リアルタイムコードビジュアライザ */
+        .chord-display-container {
+            grid-column: 1 / -1;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2rem;
+            backdrop-filter: blur(12px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 220px;
+            position: relative;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        }
+
+        #current-chord {
+            font-size: 5rem;
+            font-weight: 800;
+            color: var(--neon-blue);
+            text-shadow: 0 0 20px rgba(0, 229, 255, 0.5);
+            margin-bottom: 0.5rem;
+            letter-spacing: -2px;
+            transition: all 0.15s ease-out;
+        }
+
+        #chord-progress-bar {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 2px;
+            margin-top: 1rem;
+            overflow: hidden;
+        }
+
+        #chord-progress-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, var(--neon-blue), var(--neon-purple));
+            box-shadow: 0 0 10px var(--neon-blue);
+            transition: width 0.1s linear;
+        }
+
+        /* メディアプレイヤーコントローラー */
+        .player-controls {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem 2rem;
+            backdrop-filter: blur(12px);
+            display: flex;
+            flex-direction: column;
+            gap: 1.2rem;
+        }
+
+        .player-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1.5rem;
+        }
+
+        .btn-group {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .control-btn {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .control-btn:hover {
+            background: var(--neon-blue);
+            border-color: var(--neon-blue);
+            color: #000;
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.4);
+            transform: scale(1.05);
+        }
+
+        .control-btn svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+            stroke: currentColor;
+        }
+
+        .time-display {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* カスタムシークバー */
+        .seek-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        #seekbar {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.1);
+            outline: none;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        #seekbar::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--neon-blue);
+            box-shadow: 0 0 10px var(--neon-blue);
+            cursor: pointer;
+            transition: transform 0.1s;
+        }
+
+        #seekbar::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        /* Web Audio API 波形ビジュアライザ */
+        .visualizer-container {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1rem;
+            height: 180px;
+            position: relative;
+            overflow: hidden;
+            backdrop-filter: blur(12px);
+        }
+
+        #visualizer-canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        /* コードタイムライン（スクロール） */
+        .timeline-container {
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+
+        .timeline-label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding-left: 0.5rem;
+        }
+
+        .timeline-scroll {
+            display: flex;
+            gap: 0.8rem;
+            overflow-x: auto;
+            padding: 0.5rem;
+            scroll-behavior: smooth;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.03);
+        }
+
+        /* スクロールバー装飾 */
+        .timeline-scroll::-webkit-scrollbar {
+            height: 6px;
+        }
+
+        .timeline-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+        }
+
+        .timeline-scroll::-webkit-scrollbar-thumb:hover {
+            background: rgba(0, 229, 255, 0.3);
+        }
+
+        .chord-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 1rem;
+            min-width: 100px;
+            text-align: center;
+            flex-shrink: 0;
+            transition: all 0.25s ease;
+        }
+
+        .chord-card.active {
+            background: rgba(0, 229, 255, 0.08);
+            border-color: var(--neon-blue);
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.2);
+            transform: scale(1.05);
+        }
+
+        .chord-card.active-chorus {
+            background: rgba(255, 0, 127, 0.08);
+            border-color: var(--neon-pink);
+            box-shadow: 0 0 15px rgba(255, 0, 127, 0.2);
+        }
+
+        .chord-card-name {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 0.3rem;
+            color: var(--text-main);
+        }
+
+        .chord-card.active .chord-card-name {
+            color: var(--neon-blue);
+            text-shadow: 0 0 5px rgba(0, 229, 255, 0.5);
+        }
+
+        .chord-card.active-chorus .chord-card-name {
+            color: var(--neon-pink);
+            text-shadow: 0 0 5px rgba(255, 0, 127, 0.5);
+        }
+
+        .chord-card-time {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border-color);
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Audio Analyzer Studio</h1>
+        <div class="subtitle">Premium MIR Suite</div>
+    </header>
+
+    <main>
+        <!-- ファイル選択ドラッグ＆ドロップ -->
+        <div id="upload-zone" onclick="document.getElementById('file-input').click()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+            <p>音声ファイルをドラッグ＆ドロップするか、クリックして選択</p>
+            <span>対応形式: WAV, MP3, FLAC, OGG, M4A</span>
+            <input type="file" id="file-input" style="display: none" accept=".wav,.mp3,.flac,.ogg,.m4a">
+        </div>
+
+        <!-- 解析中ローディング -->
+        <div id="loading-container">
+            <div class="spinner"></div>
+            <div class="loading-title">AI音源分離 & 楽曲解析を実行中</div>
+            <div class="loading-msg">これには数十秒かかる場合があります。しばらくお待ちください...</div>
+        </div>
+
+        <!-- 解析結果ダッシュボード -->
+        <div id="dashboard">
+            <!-- 3カラムカード情報 -->
+            <div class="dashboard-grid">
+                <div class="card">
+                    <div class="card-label">Estimated BPM</div>
+                    <div id="val-bpm" class="card-value">--</div>
+                    <div class="card-subvalue">Time Signature: 4/4</div>
+                </div>
+                <div class="card purple">
+                    <div class="card-label">Estimated Key</div>
+                    <div id="val-key" class="card-value">--</div>
+                    <div id="val-key-confidence" class="card-subvalue">Confidence: --</div>
+                </div>
+                <div id="chorus-panel" class="card pink">
+                    <div class="card-label">Chorus Status</div>
+                    <div id="val-chorus" class="card-value">VERSE</div>
+                    <div id="val-chorus-info" class="card-subvalue">Not in chorus section</div>
+                </div>
+                <div class="card green">
+                    <div class="card-label">Music Genre</div>
+                    <div id="val-genre" class="card-value">--</div>
+                    <div class="card-subvalue">AI Spectral Classification</div>
+                </div>
+            </div>
+
+            <!-- コード表示 -->
+            <div class="chord-display-container">
+                <div class="card-label" style="position: absolute; top: 1.5rem;">Current Chord</div>
+                <div id="current-chord">--</div>
+                <div id="chord-time-span" class="card-subvalue">0.0s - 0.0s</div>
+                <div id="chord-progress-bar">
+                    <div id="chord-progress-fill"></div>
+                </div>
+            </div>
+
+            <!-- 音声波形ビジュアライザ (Web Audio API) -->
+            <div class="visualizer-container">
+                <canvas id="visualizer-canvas"></canvas>
+            </div>
+
+            <!-- プレイヤーコントローラー -->
+            <div class="player-controls">
+                <div class="player-row">
+                    <div class="btn-group">
+                        <button id="btn-play-pause" class="control-btn" title="再生/一時停止">
+                            <svg id="svg-play" viewBox="0 0 24 24">
+                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                            </svg>
+                            <svg id="svg-pause" viewBox="0 0 24 24" style="display: none">
+                                <rect x="6" y="4" width="4" height="16"></rect>
+                                <rect x="14" y="4" width="4" height="16"></rect>
+                            </svg>
+                        </button>
+                        <span id="current-time" class="time-display">0:00</span>
+                    </div>
+                    <div class="seek-container">
+                        <input type="range" id="seekbar" value="0" min="0" max="100">
+                    </div>
+                    <span id="total-time" class="time-display">0:00</span>
+                </div>
+            </div>
+
+            <!-- 横スクロール・コードタイムライン -->
+            <div class="timeline-container">
+                <div class="timeline-label">Chord Progression Timeline</div>
+                <div id="chord-timeline" class="timeline-scroll">
+                    <!-- JavaScriptで動的生成 -->
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        &copy; 2026 Audio Analyzer Studio. Powered by Demucs & Librosa.
+    </footer>
+
+    <!-- 音声再生用の非表示オーディオタグ -->
+    <audio id="audio-player" style="display: none"></audio>
+
+    <script>
+        // DOM要素
+        const uploadZone = document.getElementById('upload-zone');
+        const fileInput = document.getElementById('file-input');
+        const loadingContainer = document.getElementById('loading-container');
+        const dashboard = document.getElementById('dashboard');
+        
+        const valBpm = document.getElementById('val-bpm');
+        const valKey = document.getElementById('val-key');
+        const valKeyConf = document.getElementById('val-key-confidence');
+        const valChorus = document.getElementById('val-chorus');
+        const valChorusInfo = document.getElementById('val-chorus-info');
+        const valGenre = document.getElementById('val-genre');
+        const currentChord = document.getElementById('current-chord');
+        const chordTimeSpan = document.getElementById('chord-time-span');
+        const chordProgressFill = document.getElementById('chord-progress-fill');
+        const chorusPanel = document.getElementById('chorus-panel');
+        
+        const audioPlayer = document.getElementById('audio-player');
+        const btnPlayPause = document.getElementById('btn-play-pause');
+        const svgPlay = document.getElementById('svg-play');
+        const svgPause = document.getElementById('svg-pause');
+        const currentTimeText = document.getElementById('current-time');
+        const totalTimeText = document.getElementById('total-time');
+        const seekbar = document.getElementById('seekbar');
+        const chordTimeline = document.getElementById('chord-timeline');
+        
+        const canvas = document.getElementById('visualizer-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // グローバルデータ
+        let analysisResult = null;
+        let audioCtx = null;
+        let analyser = null;
+        let sourceNode = null;
+        let animationFrameId = null;
+
+        // ドラッグ＆ドロップイベント設定
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.style.borderColor = 'var(--neon-purple)';
+        });
+
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.style.borderColor = 'rgba(0, 229, 255, 0.25)';
+        });
+
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.style.borderColor = 'rgba(0, 229, 255, 0.25)';
+            if (e.dataTransfer.files.length > 0) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        // ファイルアップロード ＆ 解析要求
+        function handleFile(file) {
+            uploadZone.style.display = 'none';
+            loadingContainer.style.display = 'block';
+            dashboard.style.display = 'none';
+            if (audioPlayer) {
+                audioPlayer.pause();
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            fetch('/api/analyze', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => {
+                if (!res.ok) throw new Error('解析に失敗しました。対応ファイル形式かご確認ください。');
+                return res.json();
+            })
+            .then(data => {
+                analysisResult = data;
+                loadingContainer.style.display = 'none';
+                dashboard.style.display = 'flex';
+                initDashboard(data);
+            })
+            .catch(err => {
+                alert(err.message);
+                uploadZone.style.display = 'block';
+                loadingContainer.style.display = 'none';
+            });
+        }
+
+        // ダッシュボードの初期化
+        function initDashboard(data) {
+            // パネル値の設定
+            valBpm.innerText = Math.round(data.tempo_bpm || 0);
+            valKey.innerText = data.estimated_key || 'Unknown';
+            valKeyConf.innerText = `Confidence: ${(data.confidence || 0).toFixed(2)}`;
+            valGenre.innerText = data.genre || 'Unknown';
+
+            // オーディオのロード
+            audioPlayer.src = data.audio_url;
+            audioPlayer.load();
+
+            // タイムライン構築
+            buildTimeline(data.chords || []);
+
+            // 再生イベント監視
+            audioPlayer.onloadedmetadata = () => {
+                totalTimeText.innerText = formatTime(audioPlayer.duration);
+                seekbar.max = audioPlayer.duration;
+            };
+
+            audioPlayer.ontimeupdate = () => {
+                const time = audioPlayer.currentTime;
+                currentTimeText.innerText = formatTime(time);
+                seekbar.value = time;
+                updateRealtimeDisplay(time);
+            };
+
+            // シークバーのユーザー操作
+            seekbar.oninput = () => {
+                audioPlayer.currentTime = seekbar.value;
+                updateRealtimeDisplay(seekbar.value);
+            };
+        }
+
+        // コード進行タイムラインのHTMLカード構築
+        function buildTimeline(chords) {
+            chordTimeline.innerHTML = '';
+            chords.forEach((c, idx) => {
+                const card = document.createElement('div');
+                card.className = 'chord-card';
+                card.id = `chord-card-${idx}`;
+                card.innerHTML = `
+                    <div class="chord-card-name">${c.chord}</div>
+                    <div class="chord-card-time">${c.start_sec.toFixed(1)}s</div>
+                `;
+                
+                // クリックでその時間にジャンプ（シーク）
+                card.onclick = () => {
+                    audioPlayer.currentTime = c.start_sec;
+                };
+                chordTimeline.appendChild(card);
+            });
+        }
+
+        // 秒数フォーマット (mm:ss)
+        function formatTime(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return `${m}:${s < 10 ? '0' : ''}${s}`;
+        }
+
+        // 再生位置と同期したリアルタイム情報更新
+        function updateRealtimeDisplay(time) {
+            if (!analysisResult) return;
+
+            // 1. 現在のコードの特定
+            const chords = analysisResult.chords || [];
+            let activeIdx = -1;
+            let activeChord = null;
+
+            for (let i = 0; i < chords.length; i++) {
+                if (time >= chords[i].start_sec && time <= chords[i].end_sec) {
+                    activeIdx = i;
+                    activeChord = chords[i];
+                    break;
+                }
+            }
+
+            // カードのハイライト表示の更新
+            const cards = chordTimeline.children;
+            for (let i = 0; i < cards.length; i++) {
+                cards[i].classList.remove('active', 'active-chorus');
+            }
+
+            // サビ（Chorus）区間判定
+            const chorusSections = analysisResult.chorus_sections || [];
+            let inChorus = false;
+            for (let sec of chorusSections) {
+                if (time >= sec.start_sec && time <= sec.end_sec) {
+                    inChorus = true;
+                    break;
+                }
+            }
+
+            if (activeChord) {
+                currentChord.innerText = activeChord.chord;
+                chordTimeSpan.innerText = `${activeChord.start_sec.toFixed(1)}s - ${activeChord.end_sec.toFixed(1)}s`;
+                
+                // コード内部プログレスの計算
+                const span = activeChord.end_sec - activeChord.start_sec;
+                const progress = ((time - activeChord.start_sec) / (span || 1)) * 100;
+                chordProgressFill.style.width = `${progress}%`;
+
+                // 該当カードのハイライト
+                const activeCard = document.getElementById(`chord-card-${activeIdx}`);
+                if (activeCard) {
+                    if (inChorus) {
+                        activeCard.classList.add('active-chorus');
+                    } else {
+                        activeCard.classList.add('active');
+                    }
+                    // 自動スクロール
+                    chordTimeline.scrollTo({
+                        left: activeCard.offsetLeft - chordTimeline.offsetWidth / 2 + activeCard.offsetWidth / 2,
+                        behavior: 'smooth'
+                    });
+                }
+            } else {
+                currentChord.innerText = '--';
+                chordTimeSpan.innerText = '0.0s - 0.0s';
+                chordProgressFill.style.width = '0%';
+            }
+
+            // サビパネル演出の更新
+            if (inChorus) {
+                chorusPanel.classList.add('active');
+                valChorus.innerText = 'CHORUS 🔥';
+                valChorusInfo.innerText = 'Inside active chorus section';
+            } else {
+                chorusPanel.classList.remove('active');
+                valChorus.innerText = 'VERSE 🎵';
+                valChorusInfo.innerText = 'Not in chorus section';
+            }
+        }
+
+        // 再生 / 一時停止コントロール
+        btnPlayPause.onclick = () => {
+            // Web Audio APIのコンテキスト遅延生成 (ブラウザセキュリティ対応)
+            initAudioContext();
+
+            if (audioPlayer.paused) {
+                audioPlayer.play();
+                svgPlay.style.display = 'none';
+                svgPause.style.display = 'block';
+            } else {
+                audioPlayer.pause();
+                svgPlay.style.display = 'block';
+                svgPause.style.display = 'none';
+            }
+        };
+
+        // Web Audio API の初期化 (最初のPlayクリック時に実行)
+        function initAudioContext() {
+            if (audioCtx) return;
+
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 256;
+
+            sourceNode = audioCtx.createMediaElementSource(audioPlayer);
+            sourceNode.connect(analyser);
+            analyser.connect(audioCtx.destination);
+
+            // ビジュアライザのキャンバスサイズを設定
+            resizeCanvas();
+            window.onresize = resizeCanvas;
+
+            // アニメーションループ開始
+            drawVisualizer();
+        }
+
+        function resizeCanvas() {
+            canvas.width = canvas.parentElement.offsetWidth;
+            canvas.height = canvas.parentElement.offsetHeight;
+        }
+
+        // Web Audio API リアルタイム波形アニメーション描画
+        function drawVisualizer() {
+            animationFrameId = requestAnimationFrame(drawVisualizer);
+
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            analyser.getByteFrequencyData(dataArray);
+
+            const width = canvas.width;
+            const height = canvas.height;
+
+            ctx.clearRect(0, 0, width, height);
+
+            // グラデーション設定
+            const grad = ctx.createLinearGradient(0, height, width, 0);
+            grad.addColorStop(0, 'rgba(189, 0, 255, 0.8)'); // Neon Purple
+            grad.addColorStop(0.5, 'rgba(0, 229, 255, 0.8)'); // Neon Blue
+            grad.addColorStop(1, 'rgba(255, 0, 127, 0.8)'); // Neon Pink
+
+            const barWidth = (width / bufferLength) * 1.5;
+            let barHeight;
+            let x = 0;
+
+            for (let i = 0; i < bufferLength; i++) {
+                barHeight = (dataArray[i] / 255) * height * 0.95;
+
+                ctx.fillStyle = grad;
+                // 角丸バーの描画
+                ctx.beginPath();
+                ctx.roundRect(x, height - barHeight, barWidth - 4, barHeight, 4);
+                ctx.fill();
+
+                x += barWidth;
+            }
+        }
+    </script>
+</body>
+</html>
