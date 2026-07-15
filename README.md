@@ -29,7 +29,7 @@ audio_analyzer/
 │   ├── filter/               # 前処理用フィルター (Demucs音源分離、帯域分割、コンプレッサ)
 │   └── strategy/             # 各解析アルゴリズムの実装 (BPM, キー, コード, サビ, 類似度, ジャンル)
 ├── model/                    # 音声データの共通オブジェクトモデル
-├── reader/                   # 音声ファイルデコーダー (WAV, MP3, OGG等対応)
+├── reader/                   # 音声ファイルデコーダー (WAV, MP3, FLAC, OGG等対応)
 ├── writer/                   # 解析結果のJSONファイル出力
 ├── tests/                    # 自動単体テストスイート
 ├── main.py                   # サンプル実行エントリポイント
@@ -58,60 +58,68 @@ audio_analyzer/
 
 ---
 
-## 💻 使用方法と出力結果
+## 💻 使用方法
 
-付属の `main.py` を実行することで、フィルター適用からすべての解析を一括で検証できます。
+コマンドラインから解析対象のファイルや実行したい解析戦略（BPM, キー, コード, サビ等）を動的に指定して実行できます。
+
+### 基本コマンド
 
 ```bash
-python main.py
+python main.py -i <入力音声ファイル> -o <出力結果JSON> -s <解析戦略>
 ```
 
-実行が完了すると、ルートディレクトリに以下の解析結果JSONファイルが出力されます。
+#### オプション一覧:
+- `-i`, `--input` (必須): 解析対象の音声ファイルへのパス (WAV, MP3, FLAC, OGG等)。
+- `-o`, `--output` (デフォルト: `result.json`): 解析結果を保存するJSONファイル。
+- `-s`, `--strategies` (複数指定可能, デフォルト: `all`): 実行する解析戦略を指定。
+  - `beat`: BPM・テンポ検出
+  - `sliding-beat`: 時系列テンポ遷移トラッキング
+  - `key`: 主キー（調）判定
+  - `chord`: 秒数ごとのコード進行特定
+  - `chorus`: サビ（Chorus）区間自動特定
+  - `genre`: 音楽ジャンル推定
+  - `similarity`: 音声類似度計算 *(※ `--reference` が必須)*
+  - `all`: `similarity` を除くすべての解析を一括実行し、結果を1つのファイルにマージして出力します。
+- `-r`, `--reference`: 類似度計算用の比較対象音声ファイルのパス。
+- `--no-separation`: AI音源分離 (Demucs) をスキップして直接解析を行います (処理が高速化します)。
+- `--cutoff`: ドラム低域抽出用フィルターの遮断周波数 (Hz, デフォルト: 150.0)。
+- `--threshold`: アタック音強調コンプレッサーの閾値 (デフォルト: 0.2)。
+- `--ratio`: コンプレッサーの比率 (デフォルト: 3.0)。
 
-### ① `result_simple.json` (BPM解析結果)
+### 💡 実行例
+
+#### 1. 1つのファイルに対してBPM、キー、サビを一括解析し、結果をマージして出力
+```bash
+python main.py -i standard_dance.wav -o report.json -s beat key chorus
+```
+
+#### 2. 音源分離をスキップして高速にコード進行のみを特定
+```bash
+python main.py -i standard_dance.wav -o chords.json -s chord --no-separation
+```
+
+#### 3. 2つのファイルの音声類似度を比較
+```bash
+python main.py -i standard_dance.wav -r complex_prog_rock.wav -s similarity
+```
+
+---
+
+## 📄 出力結果（マージ例）
+
+複数の戦略を一括実行した場合、以下のようにマージされた単一の JSON ファイルとして結果が得られます。
+
 ```json
 {
     "status": "success",
-    "tempo_bpm": 120.0,
+    "tempo_bpm": 117.5,
     "time_signature": "4/4",
-    "confidence": 0.95
-}
-```
-
-### ② `result_key.json` (キー推定結果)
-```json
-{
-    "status": "success",
     "estimated_key": "G Minor",
     "key_tonic": "G",
     "key_scale": "Minor",
-    "confidence": 0.692
-}
-```
-
-### ③ `result_chords.json` (コード進行判定結果)
-楽曲全体のコード（和音）の推移を秒数付きでリスト化して出力します。
-```json
-{
-    "status": "success",
-    "chords": [
-        { "start_sec": 0.0, "end_sec": 1.25, "chord": "Em" },
-        { "start_sec": 1.25, "end_sec": 2.35, "chord": "C" },
-        { "start_sec": 2.35, "end_sec": 4.25, "chord": "G" }
-    ]
-}
-```
-
-### ④ `result_chorus.json` (サビ区間特定結果)
-最も盛り上がり、かつ繰り返し出現する「サビ」の位置を自動検出します。サビの繰り返しがある場合、複数の区間が出力されます。
-```json
-{
-    "status": "success",
     "chorus_sections": [
-        { "start_sec": 12.5, "end_sec": 28.0 },
-        { "start_sec": 55.0, "end_sec": 70.5 }
-    ],
-    "confidence": 0.85
+        { "start_sec": 0.0, "end_sec": 6.0 }
+    ]
 }
 ```
 
