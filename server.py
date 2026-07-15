@@ -1,3 +1,4 @@
+from analyzer.filter.HermonicSeparationFilter import HarmonicSeparationFilter
 import os
 import shutil
 import uuid
@@ -15,6 +16,9 @@ from analyzer.strategy.GenreClassificationStrategy import GenreClassificationStr
 from analyzer.strategy.KeyDetectionStrategy import KeyDetectionStrategy
 from analyzer.strategy.ChordEstimationStrategy import ChordEstimationStrategy
 from analyzer.strategy.ChorusDetectionStrategy import ChorusDetectionStrategy
+from analyzer.strategy.ChorusDetectionVocalStrategy import ChorusDetectionVocalStrategy
+from analyzer.strategy.ChorusDetectionSSMStrategy import ChorusDetectionSSMStrategy
+from analyzer.strategy.ChorusDetectionBeatSSMStrategy import ChorusDetectionBeatSSMStrategy
 from reader.LibrosaAudioReader import LibrosaAudioReader
 from writer.IResultWriter import IResultWriter
 
@@ -94,7 +98,8 @@ async def analyze_audio(file: UploadFile = File(...)):
         filters: List[IAudioFilter] = [
             SourceSeparatorFilter(target_key="target"),
             BandSplitterFilter(target_key="target_drums", cutoff_hz=150.0),
-            CompressorFilter(target_key="target_drums_low", threshold=0.2, ratio=3.0)
+            CompressorFilter(target_key="target_drums_low", threshold=0.2, ratio=3.0),
+            HarmonicSeparationFilter()
         ]
         
         analyzer = AudioAnalyzer(reader, mem_writer, SimpleBeatStrategy(), filters=filters)
@@ -102,11 +107,15 @@ async def analyze_audio(file: UploadFile = File(...)):
         input_paths = {"target": temp_path}
         
         # 全ての解析戦略を一括実行 (process_multi で読込・分離が1回のみ)
+        # サビ検出は3手法を並走させ、比較できるようにする
         strategies: List[IAnalysisStrategy] = [
             SimpleBeatStrategy(),
             KeyDetectionStrategy(),
             ChordEstimationStrategy(),
-            ChorusDetectionStrategy(),
+            ChorusDetectionStrategy(),       # 手法A: RMS + スペクトル重心
+            ChorusDetectionVocalStrategy(),  # 手法B: ボーカル分離 + 適応閾値
+            ChorusDetectionSSMStrategy(),    # 手法C: 自己類似行列(SSM)構造解析
+            ChorusDetectionBeatSSMStrategy(), # 手法D: ビート同期SSM + 対角パス強調
             GenreClassificationStrategy()
         ]
         
@@ -119,12 +128,15 @@ async def analyze_audio(file: UploadFile = File(...)):
         return result_data
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
             except Exception:
                 pass
         raise HTTPException(status_code=500, detail=f"Analysis pipeline error: {str(e)}")
+
 
 @app.get("/api/audio/{filename}")
 def get_audio_stream(filename: str):

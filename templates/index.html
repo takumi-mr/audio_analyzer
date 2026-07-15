@@ -502,6 +502,28 @@
             color: var(--text-muted);
             border-top: 1px solid var(--border-color);
         }
+
+        .method-btn {
+            padding: 0.4rem 0.9rem;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .method-btn:hover {
+            border-color: var(--neon-blue);
+            color: var(--text-main);
+        }
+        .method-btn.active {
+            background: linear-gradient(135deg, rgba(0,229,255,0.15), rgba(189,0,255,0.15));
+            border-color: var(--neon-blue);
+            color: var(--neon-blue);
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
@@ -555,6 +577,27 @@
                     <div id="val-genre" class="card-value">--</div>
                     <div class="card-subvalue">AI Spectral Classification</div>
                 </div>
+            </div>
+
+            <!-- サビ検出 手法切り替えパネル -->
+            <div class="card" style="grid-column: 1 / -1; padding: 1.2rem 1.5rem;">
+                <div class="card-label" style="margin-bottom: 0.8rem;">Chorus Detection Method</div>
+                <div style="display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center;">
+                    <button id="btn-method-rms" class="method-btn active" onclick="switchChorusMethod('rms')">
+                        🎚 RMS + Centroid
+                    </button>
+                    <button id="btn-method-vocal" class="method-btn" onclick="switchChorusMethod('vocal')">
+                        🎤 Vocal + Adaptive
+                    </button>
+                    <button id="btn-method-ssm" class="method-btn" onclick="switchChorusMethod('ssm')">
+                        🔬 SSM Structure
+                    </button>
+                    <button id="btn-method-beat_ssm" class="method-btn" onclick="switchChorusMethod('beat_ssm')">
+                        ⚡ Beat-Sync SSM
+                    </button>
+                    <span id="method-confidence" style="margin-left: auto; font-size: 0.8rem; color: var(--text-muted);">Confidence: --</span>
+                </div>
+                <div id="method-sections-preview" style="margin-top: 0.8rem; font-size: 0.78rem; color: var(--text-muted); min-height: 1.2em;"></div>
             </div>
 
             <!-- コード表示 -->
@@ -711,7 +754,7 @@
             valBpm.innerText = Math.round(data.tempo_bpm || 0);
             valKey.innerText = data.estimated_key || 'Unknown';
             valKeyConf.innerText = `Confidence: ${(data.confidence || 0).toFixed(2)}`;
-            valGenre.innerText = data.genre || 'Unknown';
+            valGenre.innerText = data.detected_genre || 'Unknown';
 
             // オーディオのロード
             audioPlayer.src = data.audio_url;
@@ -719,6 +762,10 @@
 
             // タイムライン構築
             buildTimeline(data.chords || []);
+
+            // 手法パネルの初期表示
+            renderMethodInfo(data);
+            switchChorusMethod('beat_ssm');
 
             // 再生イベント監視
             audioPlayer.onloadedmetadata = () => {
@@ -767,6 +814,32 @@
             return `${m}:${s < 10 ? '0' : ''}${s}`;
         }
 
+        // サビ検出手法選択状態（グローバルスコープ）
+        let activeChorusMethod = 'rms';
+
+        function switchChorusMethod(method) {
+            activeChorusMethod = method;
+            ['rms', 'vocal', 'ssm', 'beat_ssm'].forEach(m => {
+                document.getElementById(`btn-method-${m}`).classList.toggle('active', m === method);
+            });
+            if (analysisResult) renderMethodInfo(analysisResult);
+        }
+
+        function getChorusSections(data) {
+            return data[`chorus_sections_${activeChorusMethod}`] || [];
+        }
+
+        function renderMethodInfo(data) {
+            const conf = data[`chorus_confidence_${activeChorusMethod}`];
+            const secs = data[`chorus_sections_${activeChorusMethod}`] || [];
+            document.getElementById('method-confidence').innerText =
+                `Confidence: ${conf !== undefined ? conf.toFixed(2) : '--'}`;
+            document.getElementById('method-sections-preview').innerText =
+                secs.length
+                    ? 'Detected: ' + secs.map(s => `${s.start_sec.toFixed(0)}s–${s.end_sec.toFixed(0)}s`).join(', ')
+                    : 'No chorus sections detected';
+        }
+
         // 再生位置と同期したリアルタイム情報更新
         function updateRealtimeDisplay(time) {
             if (!analysisResult) return;
@@ -790,8 +863,8 @@
                 cards[i].classList.remove('active', 'active-chorus');
             }
 
-            // サビ（Chorus）区間判定
-            const chorusSections = analysisResult.chorus_sections || [];
+            // サビ（Chorus）区間判定（アクティブ手法のデータを使用）
+            const chorusSections = getChorusSections(analysisResult);
             let inChorus = false;
             for (let sec of chorusSections) {
                 if (time >= sec.start_sec && time <= sec.end_sec) {

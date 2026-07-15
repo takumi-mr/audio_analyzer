@@ -22,10 +22,14 @@ class SourceSeparatorFilter(IAudioFilter):
             
         print(f"[Filter: SourceSeparator] Demucs ({self.model_name}) を用いて '{self.target_key}' の音源分離を開始します...")
         
+        # CUDAが利用可能か判定
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
         # 1. Separatorの遅延初期化（初回適用時にモデルのロード/ダウンロードを行う）
         if self._separator is None:
-            print(f"[Filter: SourceSeparator] モデル '{self.model_name}' をロード中 (初回実行時はダウンロードが発生します)...")
-            self._separator = demucs.api.Separator(model=self.model_name)
+            print(f"[Filter: SourceSeparator] モデル '{self.model_name}' をロード中 (デバイス: {device})...")
+            # device引数を追加して明示的にGPU/CPUを指定
+            self._separator = demucs.api.Separator(model=self.model_name, device=device)
             print("[Filter: SourceSeparator] モデルのロードが完了しました。")
             
         # 2. 入力信号(モノラル)を2チャンネル(ステレオ)のPyTorchテンソルに変換

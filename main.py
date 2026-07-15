@@ -11,6 +11,7 @@ from analyzer.strategy.AudioSimilarityStrategy import AudioSimilarityStrategy
 from analyzer.strategy.KeyDetectionStrategy import KeyDetectionStrategy
 from analyzer.strategy.ChordEstimationStrategy import ChordEstimationStrategy
 from analyzer.strategy.ChorusDetectionStrategy import ChorusDetectionStrategy
+from analyzer.strategy.ChorusDetectionBeatSSMStrategy import ChorusDetectionBeatSSMStrategy
 from reader.LibrosaAudioReader import LibrosaAudioReader
 from writer.JsonResultWriter import JsonResultWriter
 
@@ -29,7 +30,7 @@ def main(cli_args: Optional[List[str]] = None) -> None:
     parser.add_argument(
         "-s", "--strategies", 
         nargs="+", 
-        choices=["beat", "sliding-beat", "key", "chord", "chorus", "genre", "similarity", "all"],
+        choices=["beat", "sliding-beat", "key", "chord", "chorus", "chorus-beat-ssm", "genre", "similarity", "all"],
         default=["all"],
         help="実行する解析戦略を指定します (複数指定可能、デフォルト: all)"
     )
@@ -62,13 +63,14 @@ def main(cli_args: Optional[List[str]] = None) -> None:
         "key": KeyDetectionStrategy,
         "chord": ChordEstimationStrategy,
         "chorus": ChorusDetectionStrategy,
+        "chorus-beat-ssm": ChorusDetectionBeatSSMStrategy,
         "genre": GenreClassificationStrategy,
     }
 
     selected_keys = list(args.strategies)
     if "all" in selected_keys:
         # similarity 以外のすべてを有効化
-        selected_keys = ["beat", "key", "chord", "chorus", "genre"]
+        selected_keys = ["beat", "key", "chord", "chorus-beat-ssm", "genre"]
 
     # 重複排除（順序保持）
     seen: set = set()

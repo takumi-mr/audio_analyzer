@@ -5,7 +5,8 @@ from typing import Dict, Any, List
 from model.AudioSignal import AudioSignal
 
 class ChorusDetectionStrategy(IAnalysisStrategy):
-    """音圧(RMS)、音の明るさ(スペクトル重心)、および繰り返しの類似性に基づき、楽曲のサビ(Chorus)区間を検出する戦略"""
+    """音圧(RMS)、音の明るさ(スペクトル重心)、および繰り返しの類似性に基づき、楽曲のサビ(Chorus)区間を検出する戦略。
+    結果は 'chorus_sections_rms' キーで返す。仙6法との比較用。"""
     def analyze(self, signals: Dict[str, AudioSignal], params: Dict[str, Any] | None = None) -> Dict[str, Any]:
         # 優先ターゲット
         signal = None
@@ -42,8 +43,9 @@ class ChorusDetectionStrategy(IAnalysisStrategy):
         if n_seconds < 5:
             return {
                 "status": "success",
-                "chorus_sections": [{"start_sec": 0.0, "end_sec": round(signal.duration_sec, 2)}],
-                "confidence": 0.5
+                "chorus_sections_rms": [{"start_sec": 0.0, "end_sec": round(signal.duration_sec, 2)}],
+                "chorus_confidence_rms": 0.5,
+                "chorus_method_rms": "rms+centroid"
             }
             
         sec_energy = []
@@ -148,6 +150,7 @@ class ChorusDetectionStrategy(IAnalysisStrategy):
         
         return {
             "status": "success",
-            "chorus_sections": chorus_sections,
-            "confidence": round(confidence, 2)
+            "chorus_sections_rms": chorus_sections,
+            "chorus_confidence_rms": round(confidence, 2),
+            "chorus_method_rms": "rms+centroid"
         }

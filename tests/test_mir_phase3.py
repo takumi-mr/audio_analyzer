@@ -29,15 +29,15 @@ class TestMIRPhase3(unittest.TestCase):
         result = strategy.analyze(signals)
         
         self.assertEqual(result["status"], "success")
-        self.assertIn("chorus_sections", result)
-        self.assertGreater(len(result["chorus_sections"]), 0)
+        self.assertIn("chorus_sections_rms", result)
+        self.assertGreater(len(result["chorus_sections_rms"]), 0)
         
         # 盛り上がっている後半部分 (5.0秒〜10.0秒) がサビとして特定されているかを検証
-        found_chorus = result["chorus_sections"][0]
+        found_chorus = result["chorus_sections_rms"][0]
         # 開始秒数は 5.0秒付近 (誤差1秒以内)
         self.assertAlmostEqual(found_chorus["start_sec"], 5.0, delta=1.0)
         self.assertAlmostEqual(found_chorus["end_sec"], 10.0, delta=1.0)
-        self.assertIn("confidence", result)
+        self.assertIn("chorus_confidence_rms", result)
 
 if __name__ == "__main__":
     unittest.main()

@@ -218,3 +218,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+result_**.json
+report_**.json
+**.wav
+temp_uploads/**

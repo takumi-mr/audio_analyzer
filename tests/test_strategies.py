@@ -106,5 +106,28 @@ class TestAnalysisStrategies(unittest.TestCase):
         with self.assertRaises(ValueError):
             strategy.analyze({"target": self.signal_120bpm})
 
+    def test_chorus_detection_beat_ssm_strategy(self):
+        from analyzer.strategy.ChorusDetectionBeatSSMStrategy import ChorusDetectionBeatSSMStrategy
+        strategy = ChorusDetectionBeatSSMStrategy()
+        
+        # 16ビート以上の長さのダミー信号を作成 (約15秒)
+        long_duration = 15.0
+        t = np.linspace(0, long_duration, int(self.sr * long_duration), endpoint=False)
+        data = np.random.normal(0, 0.01, len(t))
+        # 120 BPMの拍を入れる
+        for beat_t in np.arange(0.0, long_duration, 0.5):
+            idx = int(beat_t * self.sr)
+            click_len = int(0.05 * self.sr)
+            if idx + click_len <= len(data):
+                data[idx : idx + click_len] += np.sin(2 * np.pi * 1000 * np.linspace(0, 0.05, click_len, endpoint=False))
+                
+        signal = AudioSignal(data=data, sample_rate=self.sr, duration_sec=long_duration)
+        signals = {"target": signal}
+        
+        result = strategy.analyze(signals)
+        self.assertEqual(result["status"], "success")
+        self.assertIn("chorus_sections_beat_ssm", result)
+        self.assertIn("chorus_confidence_beat_ssm", result)
+
 if __name__ == "__main__":
     unittest.main()

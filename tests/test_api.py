@@ -22,7 +22,7 @@ class TestAPI(unittest.TestCase):
     def test_analyze_audio_endpoint(self, mock_separator_apply, mock_reader_read):
         # 1. 各モックの構成
         sr = 22050
-        duration = 5.0 # サビ検出に必要な最低長
+        duration = 15.0 # サビ検出に必要な最低長 (16拍以上)
         dummy_signal = AudioSignal(
             data=np.zeros(int(sr * duration)),
             sample_rate=sr,
@@ -57,7 +57,10 @@ class TestAPI(unittest.TestCase):
         self.assertIn("tempo_bpm", result)
         self.assertIn("estimated_key", result)
         self.assertIn("chords", result)
-        self.assertIn("chorus_sections", result)
+        self.assertIn("chorus_sections_rms", result)
+        self.assertIn("chorus_sections_vocal", result)
+        self.assertIn("chorus_sections_ssm", result)
+        self.assertIn("chorus_sections_beat_ssm", result)
         self.assertIn("audio_url", result)
         self.assertEqual(result["filename"], "test.wav")
 

@@ -39,22 +39,22 @@ class GenreClassificationStrategy(IAnalysisStrategy):
         if (flatness > 0.005 or zcr > 0.12) and centroid > 2200:
             if tempo >= 115:
                 genre = "Dance"
-                confidence = float(min(0.98, 0.5 + flatness * 50 + zcr * 1.5))
+                confidence = min(0.98, 0.5 + flatness * 50 + zcr * 1.5)
             else:
                 genre = "Rock"
-                confidence = float(min(0.95, 0.4 + flatness * 45 + zcr * 2.0))
+                confidence = min(0.95, 0.4 + flatness * 45 + zcr * 2.0)
         # テンポが軽快で、音質は明るいがノイズ感（flatness）が低く抑えられている場合
         elif tempo >= 105 and centroid > 1600 and flatness <= 0.005:
             genre = "Pop"
-            confidence = float(min(0.92, 0.3 + (centroid / 3500.0) + (1.0 - flatness * 100) * 0.3))
+            confidence = min(0.92, 0.3 + (centroid / 3500.0) + (1.0 - flatness * 100) * 0.3)
         # 低音メインで、平坦度が極めて低い（楽器トーンが澄んでいる）、かつテンポが遅い
         elif centroid < 1400 and tempo < 105 and flatness < 0.003:
             genre = "Jazz"
-            confidence = float(min(0.92, 0.4 + (1.0 - centroid / 1400.0) * 0.3 + (1.0 - flatness * 200) * 0.2))
+            confidence = min(0.92, 0.4 + (1.0 - centroid / 1400.0) * 0.3 + (1.0 - flatness * 200) * 0.2)
         # 高域限界が非常に低く（rolloffが低い）、全体が極めてクリーン（zcr低、flatness超低）
         elif rolloff < 1500 and zcr < 0.03 and flatness < 0.001:
             genre = "Classical"
-            confidence = float(min(0.96, 0.5 + (1.0 - flatness * 500) * 0.3 + (1.0 - zcr * 15) * 0.15))
+            confidence = min(0.96, 0.5 + (1.0 - flatness * 500) * 0.3 + (1.0 - zcr * 15) * 0.15)
             
         return {
             "status": "success",
