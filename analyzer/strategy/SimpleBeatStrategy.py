@@ -6,10 +6,10 @@ from model.AudioSignal import AudioSignal
 
 class SimpleBeatStrategy(IAnalysisStrategy):
     """標準的な曲向け: librosaのテンポ追跡機能を用いて正確なBPMを算出する戦略"""
-    def analyze(self, signals: Dict[str, AudioSignal], params: Dict[str, Any] = None) -> Dict[str, Any]:
-        # 低域、またはドラム、それがなければ target を優先順に検索
+    def analyze(self, signals: Dict[str, AudioSignal], params: dict[str, Any] | None = None) -> Dict[str, Any]:
+        # 打楽器分離、低域、またはドラム、それがなければ target を優先順に検索
         signal = None
-        for key in ["target_low", "target_drums", "target"]:
+        for key in ["target_drums", "target_percussive", "target_low", "target"]:
             if key in signals:
                 signal = signals[key]
                 print(f"[Strategy: Simple] 解析対象として '{key}' シグナルを採用しました。")

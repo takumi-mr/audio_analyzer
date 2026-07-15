@@ -1,6 +1,7 @@
 import torch
 import demucs.api
 import librosa
+import numpy as np
 from analyzer.filter.IAudioFilter import IAudioFilter
 from typing import Dict
 from model.AudioSignal import AudioSignal
@@ -69,7 +70,7 @@ class SourceSeparatorFilter(IAudioFilter):
                 # AudioSignalオブジェクトを作成して追加
                 duration = len(stem_resampled) / target_sr
                 result_signals[output_key] = AudioSignal(
-                    data=stem_resampled,
+                    data=stem_resampled.astype(np.float32),
                     sample_rate=target_sr,
                     duration_sec=duration
                 )

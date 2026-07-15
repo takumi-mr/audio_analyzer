@@ -6,10 +6,10 @@ from model.AudioSignal import AudioSignal
 
 class SlidingWindowBeatStrategy(IAnalysisStrategy):
     """時間経過で拍子・テンポが変わる曲をスライディングウィンドウで区切り、librosaを用いて正確に解析する戦略"""
-    def analyze(self, signals: Dict[str, AudioSignal], params: Dict[str, Any] = None) -> Dict[str, Any]:
-        # 低域、またはドラム、それがなければ target を優先順に検索
+    def analyze(self, signals: Dict[str, AudioSignal], params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        # 打楽器分離、低域、またはドラム、それがなければ target を優先順に検索
         signal = None
-        for key in ["target_low", "target_drums", "target"]:
+        for key in ["target_drums", "target_percussive", "target_low", "target"]:
             if key in signals:
                 signal = signals[key]
                 print(f"[Strategy: SlidingWindow] 解析対象として '{key}' シグナルを採用しました。")
@@ -53,7 +53,7 @@ class SlidingWindowBeatStrategy(IAnalysisStrategy):
             })
             
         # 平均テンポ
-        base_bpm = round(float(np.mean([s["tempo_bpm"] for s in segments])), 1) if segments else 120.0
+        base_bpm = round(float(np.mean([float(s["tempo_bpm"]) for s in segments])), 1) if segments else 120.0
         
         return {
             "status": "success",

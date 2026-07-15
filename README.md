@@ -51,6 +51,9 @@ graph TD
 - **`SlidingWindowBeatStrategy`**: 楽曲を10秒単位の時間窓で区切り、時間経過による変拍子やテンポ遷移をトラッキング。
 - **`AudioSimilarityStrategy`**: 音色（MFCC）と音階・コード構成（Chroma CENS）の双方のコサイン類似度を別個に計算し、ハイブリッド評価を行う類似度推定。
 - **`GenreClassificationStrategy`**: BPM、明るさ（スペクトル重心）、ゼロ交差率に加え、ノイズ度（スペクトル平坦度）と高域特性（ロールオフ周波数）を組み合わせた詳細な決定木ルールに基づく音楽ジャンル判定。
+- **`KeyDetectionStrategy`**: 平均クロマ特徴量と Krumhansl-Schmuckler プロファイルの相関分析を用いた楽曲キー（調）の自動推定。
+- **`ChordEstimationStrategy`**: クロマ特徴量と主要24和音（Major/Minor）テンプレートのマッチングにより秒数ごとのコード進行を出力。
+- **`ChorusDetectionStrategy`**: 音圧（RMS）、明るさ（スペクトル重心）、およびクロマ類似度の繰り返し情報から、サビの開始・終了秒数を自動特定。
 
 ---
 
@@ -70,7 +73,9 @@ audio_analyzer/
 │       ├── SimpleBeatStrategy.py
 │       ├── SlidingWindowBeatStrategy.py
 │       ├── AudioSimilarityStrategy.py
-│       └── GenreClassificationStrategy.py
+│       ├── GenreClassificationStrategy.py
+│       ├── KeyDetectionStrategy.py
+│       └── ChordEstimationStrategy.py
 ├── model/                     # データモデル
 │   └── AudioSignal.py
 ├── reader/                    # 音声デコーダ
@@ -86,7 +91,9 @@ audio_analyzer/
 │   ├── test_writer.py
 │   ├── test_analyzer.py
 │   ├── test_filter.py
-│   └── test_strategies.py
+│   ├── test_strategies.py
+│   ├── test_mir_phase1.py
+│   └── test_mir_phase2.py
 ├── main.py                    # サンプル実行エントリポイント
 ├── requirements.txt           # 依存パッケージ定義
 └── README.md                  # 本ファイル
@@ -132,6 +139,9 @@ python main.py
 - `result_complex.json` (時系列テンポトラッキング結果)
 - `result_genre.json` (音楽ジャンル判定・音響特徴量データ)
 - `result_similarity.json` (音色・音階ブレンド類似度)
+- `result_key.json` (キー推定結果)
+- `result_chords.json` (コード進行推定結果)
+- `result_chorus.json` (サビ区間特定結果)
 
 ---
 
