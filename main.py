@@ -6,18 +6,28 @@ from analyzer.strategy.AudioSimilarityStrategy import AudioSimilarityStrategy
 from reader.LibrosaAudioReader import LibrosaAudioReader
 from writer.JsonResultWriter import JsonResultWriter
 
+# フィルターのインポート
+from analyzer.filter.BandSplitterFilter import BandSplitterFilter
+from analyzer.filter.CompressorFilter import CompressorFilter
 
 if __name__ == "__main__":
     # インフラストラクチャ層のセットアップ
     reader = LibrosaAudioReader()
     writer = JsonResultWriter()
     
-    # 1. シンプルな曲を解析する場合
-    analyzer = AudioAnalyzer(reader, writer, SimpleBeatStrategy())
-    print("--- 4つ打ちのダンスミュージックを解析 ---")
+    # 事前処理フィルターのセットアップ
+    # 1. 信号を低音域と高音域に分割
+    splitter = BandSplitterFilter(target_key="target", cutoff_hz=150.0)
+    # 2. 分割された低音域のみに対してコンプレッサーをかけてアタック音を強調
+    compressor = CompressorFilter(target_key="target_low", threshold=0.2, ratio=3.0)
+    
+    # analyzerにフィルターを追加して初期化
+    analyzer = AudioAnalyzer(reader, writer, SimpleBeatStrategy(), filters=[splitter, compressor])
+    
+    print("--- 4つ打ちのダンスミュージックを解析 (低域強調フィルター適用) ---")
     analyzer.process_file("standard_dance.wav", "result_simple.json")
     
-    print("\n--- プログレッシブ・ロックを解析 ---")
+    print("\n--- プログレッシブ・ロックを解析 (低域強調フィルター適用) ---")
     # 2. 実行時にアルゴリズムを変拍子対応のものに切り替える
     analyzer.set_strategy(SlidingWindowBeatStrategy())
     analyzer.process_file("complex_prog_rock.wav", "result_complex.json")

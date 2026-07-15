@@ -6,7 +6,17 @@ from model.AudioSignal import AudioSignal
 class SimpleBeatStrategy(IAnalysisStrategy):
     """標準的な曲向け: 簡易自己相関法を用いてBPMを算出する戦略"""
     def analyze(self, signals: Dict[str, AudioSignal], params: Dict[str, Any] = None) -> Dict[str, Any]:
-        signal = signals.get("target") if signals else None
+        # 低域、またはドラム、それがなければ target を優先順に検索
+        signal = None
+        for key in ["target_low", "target_drums", "target"]:
+            if key in signals:
+                signal = signals[key]
+                print(f"[Strategy: Simple] 解析対象として '{key}' シグナルを採用しました。")
+                break
+                
+        if signal is None and signals:
+            signal = next(iter(signals.values()))
+            
         if not signal or len(signal.data) == 0:
             return {"status": "error", "message": "No audio signal available."}
             
