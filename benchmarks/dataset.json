@@ -1,0 +1,30 @@
+[
+  {
+    "title": "Standard Dance Track",
+    "audio": "standard_dance.wav",
+    "tempo_bpm": 80.7,
+    "key": "G Minor",
+    "chords": [
+      { "start_sec": 0.0, "end_sec": 3.27, "chord": "Gm" },
+      { "start_sec": 3.27, "end_sec": 5.53, "chord": "Gm7" },
+      { "start_sec": 5.53, "end_sec": 9.29, "chord": "Gm" },
+      { "start_sec": 9.29, "end_sec": 10.01, "chord": "Gm7" }
+    ],
+    "chorus": [
+      { "start_sec": 3.27, "end_sec": 8.00 }
+    ]
+  },
+  {
+    "title": "Complex Prog Rock",
+    "audio": "complex_prog_rock.wav",
+    "tempo_bpm": 99.4,
+    "key": "D# Major",
+    "chords": [
+      { "start_sec": 0.0, "end_sec": 19.23, "chord": "D#" },
+      { "start_sec": 19.23, "end_sec": 20.02, "chord": "D#dim" }
+    ],
+    "chorus": [
+      { "start_sec": 10.00, "end_sec": 18.00 }
+    ]
+  }
+]

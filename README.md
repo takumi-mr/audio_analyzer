@@ -148,6 +148,73 @@ python server.py
 
 ---
 
+## 📊 自動ベンチマーク機能 (MIR精度評価)
+
+音楽情報処理 (MIR: Music Information Retrieval) の世界標準メトリクス（WCSR、MIREXキー評価、BPM P-Score、サビF1）に基づき、解析精度を自動算出・スコアリングするベンチマークツールが付属しています。
+
+### 基本実行
+
+```bash
+# 組み込みサンプルデータセット (benchmarks/dataset.json) に対する自動スコアリング
+python benchmark.py
+
+# 音源分離をスキップして高速実行
+python benchmark.py --no-separation
+
+# レポートを Markdown ファイルに出力
+python benchmark.py -o benchmark_report.md
+```
+
+#### 主な算出指標:
+- **コード進行 (WCSR)**: 秒単位の時間重み付き完全一致率 (Exact)、トライアド一致率 (Triad)、ルート音一致率 (Root)
+- **主キー判定 (Key)**: 完全一致率 (Exact) および 国際コンペMIREX基準重み付きスコア (同主調・平行調・5度圏配点)
+- **テンポ / BPM (Beat)**: 許容誤差範囲（±4%、±8%）一致率 (P-Score) および 倍テン・半テン許容一致率
+- **サビ区間 (Chorus)**: サビ区間の重なり度合い (Precision, Recall, F1 Score)
+
+#### 独自データセットの追加方法:
+`benchmarks/dataset.json` または任意の JSON ファイルに、以下のように正解ラベルを定義するだけで自動評価が可能です。
+
+```json
+[
+  {
+    "title": "My Song Title",
+    "audio": "path/to/audio.wav",
+    "tempo_bpm": 120.0,
+    "key": "C Major",
+    "chords": [
+      { "start_sec": 0.0, "end_sec": 4.0, "chord": "C" },
+      { "start_sec": 4.0, "end_sec": 8.0, "chord": "G" }
+    ],
+    "chorus": [
+      { "start_sec": 30.0, "end_sec": 45.0 }
+    ]
+  }
+]
+```
+
+### 🎧 MUSDB18 / MUSDB18-HQ データセット対応（音源分離精度評価）
+
+[MUSDB18](https://sigsep.github.io/datasets/musdb.html) および [MUSDB18-HQ](https://sigsep.github.io/datasets/musdb.html#musdb18-hq-uncompressed-wav) 形式のマルチトラック音源（各曲フォルダに `mixture.wav`, `vocals.wav`, `drums.wav`, `bass.wav`, `other.wav` が配置された構成）を直接読み込み、音楽解析評価に加えて **AI音源分離（Demucs）自体の分離精度** を自動スコアリングできます。
+
+```bash
+# MUSDB18 ディレクトリを指定して実行（サンプル: benchmarks/musdb18/）
+python benchmark.py --musdb benchmarks/musdb18
+
+# AI音源分離の分離精度 (SDR / 各パートの波形相関度) も同時に計測・評価
+python benchmark.py --musdb benchmarks/musdb18 --musdb-separation -o musdb_report.md
+
+# 曲数を絞って高速実行 (例: 5曲まで)
+python benchmark.py --musdb /path/to/musdb18hq --musdb-separation --max-tracks 5
+```
+
+#### 音源分離 (Demucs) 評価指標:
+- **各ステムの波形相関度 ($r$)**: 正解ステム音源と Demucs 分離音源の波形レベル相関（Pearson 相関係数 %）
+- **SDR (Signal-to-Distortion Ratio, dB)**: 歪み対信号比（$10 \log_{10} \frac{\|s\|^2}{\|s - \hat{s}\|^2}$）
+- **Bass / Drums / Other / Vocals 個別スコアリング**: 各パートの分離クオリティを可視化
+
+
+---
+
 ## 🧪 テストの実行
 
 各モジュール（CLI, API, 各解析アルゴリズム）が正常に動作しているかを確認するテストを一括実行できます。
@@ -155,3 +222,4 @@ python server.py
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
 ```
+
