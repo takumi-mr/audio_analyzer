@@ -60,9 +60,9 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             beat_times = librosa.frames_to_time(beat_frames, sr=sr)
             n_beats = len(beat_frames)
 
-            # 曲が短すぎる、または拍が少なすぎる場合のダイナミクス適応フォールバック
-            if n_beats < 16:
-                print(f"[Strategy: Chorus] 拍数が少ないため ({n_beats} 拍)、ダイナミクス適応フォールバックでサビを特定します。")
+            # 曲が極端に短すぎる（8拍未満）場合のダイナミクス適応フォールバック
+            if n_beats < 8:
+                print(f"[Strategy: Chorus] 拍数が極めて少ないため ({n_beats} 拍)、ダイナミクス適応フォールバックでサビを特定します。")
                 fallback_sections = self._fallback_dynamics_chorus(y_full, y_vocal, y_rhythm, sr)
                 return {
                     "status": "success",
@@ -86,11 +86,12 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
                            librosa.util.normalize(mfcc_sync, axis=0)])
 
             # 4. 自己類似行列 (SSM) の構築
-            R = librosa.segment.recurrence_matrix(X, mode='affinity', metric='cosine', sym=True, width=8)
+            rec_width = min(8, max(2, n_beats // 4))
+            R = librosa.segment.recurrence_matrix(X, mode='affinity', metric='cosine', sym=True, width=rec_width)
 
             # 5. 対角パス強調 (Path Enhancement)
             # 展開の周期に最適化されたHann窓強調
-            w = min(16, max(4, n_beats // 2))
+            w = min(16, max(2, n_beats // 2))
             R_enh = librosa.segment.path_enhance(R, w, window='hann')
             
             # 各ビートの繰り返しスコア
@@ -99,40 +100,57 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             # 6. 存在感スコア (Salience) の計算
             # ボーカル音圧
             vocal_rms = librosa.feature.rms(y=y_vocal)[0]
-            vocal_sync = librosa.util.sync(vocal_rms, beat_frames.tolist(), aggregate=np.max)[0]
+            vocal_sync = librosa.util.sync(vocal_rms.reshape(1, -1), beat_frames.tolist(), aggregate=np.max)[0]
             
             # リズム音圧
             rhythm_rms = librosa.feature.rms(y=y_rhythm)[0]
-            rhythm_sync = librosa.util.sync(rhythm_rms, beat_frames.tolist(), aggregate=np.max)[0]
+            rhythm_sync = librosa.util.sync(rhythm_rms.reshape(1, -1), beat_frames.tolist(), aggregate=np.max)[0]
+
+            # 伴奏シンセ/リード音圧 (インスト曲やダンス曲の主旋律・コードリフ検出に重要)
+            other_rms = librosa.feature.rms(y=y_other)[0]
+            other_sync = librosa.util.sync(other_rms.reshape(1, -1), beat_frames.tolist(), aggregate=np.median)[0]
 
             # 明るさ (スペクトル重心)
             centroid = librosa.feature.spectral_centroid(y=y_full, sr=sr)[0]
-            centroid_sync = librosa.util.sync(centroid, beat_frames.tolist(), aggregate=np.median)[0]
+            centroid_sync = librosa.util.sync(centroid.reshape(1, -1), beat_frames.tolist(), aggregate=np.median)[0]
+
+            # 全体音圧
+            full_rms = librosa.feature.rms(y=y_full)[0]
+            full_sync = librosa.util.sync(full_rms.reshape(1, -1), beat_frames.tolist(), aggregate=np.max)[0]
+
+            # 【アプローチ1: サブベース (<80Hz) 急上昇＆ドロップイン検知】
+            S_full = np.abs(librosa.stft(y_full))
+            freqs = librosa.fft_frequencies(sr=sr)
+            sub_energy = np.sum(S_full[freqs <= 80.0, :], axis=0)
+            sub_sync = librosa.util.sync(sub_energy.reshape(1, -1), beat_frames.tolist(), aggregate=np.median)[0]
 
             # 0-1に正規化するヘルパー関数
-            def normalize(arr):
+            def normalize(arr: np.ndarray) -> np.ndarray:
                 rng = arr.max() - arr.min()
                 return (arr - arr.min()) / (rng if rng > 0 else 1.0)
 
             rep_score = normalize(rep_score)
             vocal_sync = normalize(vocal_sync)
             rhythm_sync = normalize(rhythm_sync)
+            other_sync = normalize(other_sync)
             centroid_sync = normalize(centroid_sync)
-
-            # 7. インスト曲 (無ボーカル曲) に応じた適応型 Salience
-            full_rms = librosa.feature.rms(y=y_full)[0]
-            vocal_ratio = np.mean(vocal_rms) / (np.mean(full_rms) + 1e-8)
-            full_sync = librosa.util.sync(full_rms, beat_frames.tolist(), aggregate=np.max)[0]
             full_sync = normalize(full_sync)
-            
+            sub_sync = normalize(sub_sync)
+
+            # サブベースの局所微分（急上昇コントラスト / ドロップイン）
+            sub_diff = np.diff(sub_sync, prepend=sub_sync[0])
+            sub_drop = normalize(sub_sync + 0.6 * np.clip(sub_diff, 0.0, None))
+
+            # 7. 適応型 Salience (インスト/ボーカル曲の自動切り替え)
+            vocal_ratio = np.mean(vocal_rms) / (np.mean(full_rms) + 1e-8)
             if vocal_ratio < 0.08:
-                # インスト曲: 全体音圧/ダイナミクス(0.45) + 高音域の広がり/明るさ(0.35) + リズムアタック(0.20)
-                salience = 0.45 * full_sync + 0.35 * centroid_sync + 0.20 * rhythm_sync
+                # インスト曲: 伴奏シンセ/リード(0.35) + サブベース(0.25) + 全体音圧(0.20) + リズム(0.10) + 明るさ(0.10)
+                salience = 0.35 * other_sync + 0.25 * sub_drop + 0.20 * full_sync + 0.10 * rhythm_sync + 0.10 * centroid_sync
                 print(f"[Strategy: Chorus] インスト曲と判定しました。 (Vocal ratio: {vocal_ratio:.3f})")
-                chorus_score = 0.30 * rep_score + 0.70 * salience
+                chorus_score = 0.40 * rep_score + 0.60 * salience
             else:
-                # ボーカルあり曲: ボーカル(0.45) + 全体音圧(0.25) + リズム(0.20) + 明るさ(0.10)
-                salience = 0.45 * vocal_sync + 0.25 * full_sync + 0.20 * rhythm_sync + 0.10 * centroid_sync
+                # ボーカルあり曲: ボーカル(0.40) + 全体音圧(0.25) + サブベース(0.15) + リズム(0.10) + 明るさ(0.10)
+                salience = 0.40 * vocal_sync + 0.25 * full_sync + 0.15 * sub_drop + 0.10 * rhythm_sync + 0.10 * centroid_sync
                 chorus_score = 0.50 * rep_score + 0.50 * salience
 
             # 短いノイズを消すためにメディアンフィルタで平滑化
@@ -140,7 +158,6 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             chorus_score_smooth = scipy.ndimage.median_filter(chorus_score, size=filter_size)
 
             # 8. サビ区間の抽出
-            # 閾値係数を0.15σに設定
             threshold = np.mean(chorus_score_smooth) + 0.15 * np.std(chorus_score_smooth)
             is_chorus = chorus_score_smooth > threshold
 
@@ -148,8 +165,8 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             in_sec = False
             start_b = 0
             
-            # サビの最小継続拍数: 楽曲長に応じて動的調整 (短尺曲では4拍〜6拍)
-            min_beats_for_chorus = 8 if n_beats >= 32 else max(4, n_beats // 5)
+            # サビの最小継続拍数: 楽曲長に応じて動的調整
+            min_beats_for_chorus = 6 if n_beats >= 24 else max(3, n_beats // 5)
 
             for b in range(n_beats):
                 if is_chorus[b] and not in_sec:
@@ -163,16 +180,22 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             if in_sec and n_beats - start_b >= min_beats_for_chorus:
                 sections.append({"start_sec": float(beat_times[start_b]), "end_sec": float(beat_times[-1])})
 
-            # 安全策: セクションが空、または冒頭イントロのみ(0秒付近開始かつ全体の60%未満で終了)、あるいは短尺インスト曲の場合はダイナミクス適応フォールバック
-            total_dur = len(y_full) / sr
-            is_only_intro = (len(sections) == 1 and sections[0]["start_sec"] <= 0.5 and sections[0]["end_sec"] <= total_dur * 0.6)
-            if not sections or is_only_intro or (vocal_ratio < 0.08 and n_beats < 48):
+            # 冒頭イントロ補正: 0秒付近から始まっていて、途中で伴奏や反復の急上昇がある場合は真のサビ開始位置へスナップ
+            if sections and sections[0]["start_sec"] <= 0.5:
+                search_limit = min(8, n_beats // 2)
+                diff_curve = np.diff(chorus_score_smooth[:search_limit], prepend=chorus_score_smooth[0])
+                max_rise_b = int(np.argmax(diff_curve))
+                if max_rise_b >= 2 and chorus_score_smooth[max_rise_b] > threshold:
+                    sections[0]["start_sec"] = float(beat_times[max_rise_b])
+
+            # セクションが完全に空の場合のみダイナミクス適応フォールバック
+            if not sections:
                 sections = self._fallback_dynamics_chorus(y_full, y_vocal, y_rhythm, sr)
 
-            # 9. 隣接する区間のマージ (マージギャップを6.0秒に拡大し、ブレイク等による分断を防止)
+            # 9. 隣接する区間のマージ (マージギャップを5.0秒に設定)
             merged_sections = []
             for sec in sections:
-                if merged_sections and sec["start_sec"] - merged_sections[-1]["end_sec"] <= 6.0:
+                if merged_sections and sec["start_sec"] - merged_sections[-1]["end_sec"] <= 5.0:
                     merged_sections[-1]["end_sec"] = sec["end_sec"]
                 else:
                     merged_sections.append(sec)

@@ -410,17 +410,65 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                     best_mode = "minor"
                 
         key_name = self.pitch_classes[best_key] + (" Major" if best_mode == "major" else " Minor")
-        print(f"  - 曲全体の自動キー推定: {key_name} (ダイアトニック優遇を適用します)")
+        print(f"  - 曲全体の自動キー推定: {key_name} (機能和声Priorおよびダイアトニック優遇を適用します)")
         
+        # ---- 【アプローチ3: 調性（キー）に基づく機能和声Prior (Functional Harmony Prior)】 ----
+        # 各コードについて、主キーからの度数(deg)とコードクオリティに応じた機能和声確率を動的算出
+        n_states = len(self.chord_names)
+        functional_priors = torch.ones(n_states, dtype=torch.float32, device=self.device)
+        
+        for idx in range(n_states):
+            root_idx = self.chord_roots[idx]
+            deg = (root_idx - best_key) % 12
+            c_name = self.chord_names[idx]
+            suffix = c_name[len(self.pitch_classes[root_idx]):]
+            
+            if best_mode == "major":
+                # Majorキーの機能和声ルール
+                if deg == 0:        # I度 (Tonic): Major / M7 は高確率、7(Dominant)はトニックでは不協和のため抑制
+                    if suffix in ["", "M7", "M7(9)"]:
+                        functional_priors[idx] = 1.25
+                    elif suffix in ["7", "7(9)"]:
+                        functional_priors[idx] = 0.35
+                elif deg == 7:      # V度 (Dominant): 7th / 7(9) / Major は自然、M7は原則不出現
+                    if suffix in ["7", "7(9)", ""]:
+                        functional_priors[idx] = 1.30
+                    elif suffix in ["M7", "M7(9)"]:
+                        functional_priors[idx] = 0.15
+                elif deg in (2, 4, 9): # ii, iii, vi度: minor / m7 は自然
+                    if suffix in ["m", "m7", "m7(9)"]:
+                        functional_priors[idx] = 1.25
+                elif deg == 5:      # IV度 (Subdominant): Major / M7 は自然
+                    if suffix in ["", "M7", "M7(9)"]:
+                        functional_priors[idx] = 1.25
+                elif deg == 11 and suffix in ["dim", "dim7"]: # vii度: dim は自然
+                    functional_priors[idx] = 1.10
+            else:
+                # Minorキーの機能和声ルール
+                if deg == 0:        # i度 (Tonic): minor / m7 は高確率、Majorや7thは抑制
+                    if suffix in ["m", "m7", "m7(9)"]:
+                        functional_priors[idx] = 1.30
+                    elif suffix in ["", "7", "M7"]:
+                        functional_priors[idx] = 0.25
+                elif deg == 7:      # v度 (Dominant): 7th (和声短音階強進行) または m/m7 (自然短音階)
+                    if suffix in ["7", "7(9)", "m", "m7"]:
+                        functional_priors[idx] = 1.25
+                elif deg == 3:      # bIII度 (平行長調Tonic): Major / M7 は自然
+                    if suffix in ["", "M7", "M7(9)"]:
+                        functional_priors[idx] = 1.25
+                elif (deg == 5 and suffix in ["m", "m7"]) or (deg in (8, 10) and suffix in ["", "M7", "7"]):
+                    functional_priors[idx] = 1.20
+                elif deg == 2 and suffix in ["dim", "dim7"]: # ii度: dim は自然
+                    functional_priors[idx] = 1.10
+
         # 観測確率（Softmax）の算出
         scale_factor = 25.0
-        log_priors = torch.log(self.priors_t)
+        combined_priors = self.priors_t * functional_priors.unsqueeze(1)
+        log_priors = torch.log(combined_priors)
         log_prob = (similarities * scale_factor) + log_priors
         prob_np = torch.softmax(log_prob, dim=0).cpu().numpy()
 
-        # ---- 7. 【音楽理論に基づくHMMダイアトニック遷移確率行列】 ----
-        n_states = len(self.chord_names)
-        
+        # ---- 7. 【音楽理論に基づくHMMダイアトニック遷移確率行列】 ----        
         # 基本の自己遷移確率 (1拍単位で不要に変化するのを防ぐ)
         p_self = 0.96
         transition_matrix = np.zeros((n_states, n_states))
