@@ -62,12 +62,19 @@ def parse_pitch_class(note_str: str) -> Optional[int]:
 
 def parse_chord(chord_name: str) -> Tuple[Optional[int], str, str]:
     """
-    コード名を (ルート音ピッチクラス, トライアド種別, 詳細クオリティ) に分解
+    コード名を (ルート音ピッチクラス, トライアド種別, 詳細クオリティ) に分解。
+    スラッシュコード (例: C/E, Gm/Bb) にも対応。
     """
     name = chord_name.strip()
     if not name or name.upper() in ["N", "NO CHORD", "NONE"]:
         return None, "none", "none"
         
+    slash_bass = None
+    if "/" in name:
+        parts = name.split("/", 1)
+        name = parts[0].strip()
+        slash_bass = parse_pitch_class(parts[1].strip())
+
     root_pitch = None
     root_len = 0
     if len(name) >= 2 and name[:2].upper() in PITCH_MAP:
@@ -80,50 +87,47 @@ def parse_chord(chord_name: str) -> Tuple[Optional[int], str, str]:
     if root_pitch is None:
         return None, "unknown", name
         
-    suffix = name[root_len:].lower().replace(" ", "")
+    raw_suffix = name[root_len:].replace(" ", "")
     
     triad = "maj"
     quality = "maj"
     
-    if suffix in ["", "maj", "major"]:
+    if raw_suffix in ["", "maj", "major"]:
         triad = "maj"
         quality = "maj"
-    elif suffix in ["m", "min", "minor"]:
+    elif raw_suffix in ["M7", "maj7", "Major7", "maj7(9)"]:
+        triad = "maj"
+        quality = "maj7"
+    elif raw_suffix in ["m", "min", "minor"]:
         triad = "min"
         quality = "min"
-    elif "m7(9)" in suffix:
-        triad = "min"
-        quality = "min7(9)"
-    elif "m7" in suffix or "min7" in suffix:
+    elif raw_suffix in ["m7", "min7", "minor7"]:
         triad = "min"
         quality = "min7"
-    elif "m" in suffix and "7" not in suffix and "dim" not in suffix:
+    elif raw_suffix in ["m7(9)", "min7(9)"]:
         triad = "min"
-        quality = "min"
-    elif "m7b5" in suffix or "half-dim" in suffix:
+        quality = "min7(9)"
+    elif "m7b5" in raw_suffix.lower() or "half-dim" in raw_suffix.lower():
         triad = "dim"
         quality = "m7b5"
-    elif "dim7" in suffix:
+    elif "dim" in raw_suffix.lower():
         triad = "dim"
-        quality = "dim7"
-    elif "dim" in suffix:
-        triad = "dim"
-        quality = "dim"
-    elif "aug" in suffix or "+" in suffix:
+        quality = "dim7" if "7" in raw_suffix else "dim"
+    elif "aug" in raw_suffix.lower() or "+" in raw_suffix:
         triad = "aug"
         quality = "aug"
-    elif "sus4" in suffix:
+    elif "sus4" in raw_suffix.lower():
         triad = "sus4"
         quality = "sus4"
-    elif "7(9)" in suffix or "9" in suffix:
+    elif "7(9)" in raw_suffix.lower() or "9" in raw_suffix.lower():
         triad = "maj"
         quality = "7(9)"
-    elif "7" in suffix and "m" not in suffix:
+    elif "7" in raw_suffix and "m" not in raw_suffix:
         triad = "maj"
         quality = "7"
     else:
         triad = "maj"
-        quality = suffix
+        quality = raw_suffix
         
     return root_pitch, triad, quality
 

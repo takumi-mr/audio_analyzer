@@ -68,7 +68,7 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             chroma_sync = librosa.util.sync(chroma, beat_frames.tolist(), aggregate=np.median)
             mfcc_sync = librosa.util.sync(mfcc, beat_frames.tolist(), aggregate=np.median)
             
-            # 特徴量を結合して正規化
+            # 特徴量を結合して正規化 (和声12次元 + 音色13次元の結合空間で最高コントラストを維持)
             X = np.vstack([librosa.util.normalize(chroma_sync, axis=0), 
                            librosa.util.normalize(mfcc_sync, axis=0)])
 
@@ -76,8 +76,9 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             R = librosa.segment.recurrence_matrix(X, mode='affinity', metric='cosine', sym=True, width=8)
 
             # 5. 対角パス強調 (Path Enhancement)
-            # 16拍 (約4小節) に戻し、 Hann 窓による端の過度な減衰を防ぎます
-            R_enh = librosa.segment.path_enhance(R, min(16, max(4, n_beats // 2)), window='hann')
+            # 展開の周期に最適化されたHann窓強調
+            w = min(16, max(4, n_beats // 2))
+            R_enh = librosa.segment.path_enhance(R, w, window='hann')
             
             # 各ビートの繰り返しスコア
             rep_score = np.max(R_enh, axis=1)
@@ -149,8 +150,10 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             if in_sec and n_beats - start_b >= min_beats_for_chorus:
                 sections.append({"start_sec": float(beat_times[start_b]), "end_sec": float(beat_times[-1])})
 
-            # 安全策: 何も検出されなかった場合はダイナミクスフォールバック
-            if not sections:
+            # 安全策: セクションが空、または冒頭イントロのみ(0秒付近開始かつ全体の60%未満で終了)、あるいは短尺インスト曲の場合はダイナミクス適応フォールバック
+            total_dur = len(y_full) / sr
+            is_only_intro = (len(sections) == 1 and sections[0]["start_sec"] <= 0.5 and sections[0]["end_sec"] <= total_dur * 0.6)
+            if not sections or is_only_intro or (vocal_ratio < 0.08 and n_beats < 48):
                 sections = self._fallback_dynamics_chorus(y_full, y_vocal, y_rhythm, sr)
 
             # 9. 隣接する区間のマージ (マージギャップを6.0秒に拡大し、ブレイク等による分断を防止)

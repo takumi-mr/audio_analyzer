@@ -43,6 +43,22 @@ class ChordEstimationStrategy(IAnalysisStrategy):
             for k in range(12)
         }
 
+        # コード構成音のインターバル定義 (オンコード判定用)
+        self.chord_intervals_dict = {
+            "": [0, 4, 7],
+            "m": [0, 3, 7],
+            "M7": [0, 4, 7, 11],
+            "m7": [0, 3, 7, 10],
+            "7": [0, 4, 7, 10],
+            "dim": [0, 3, 6],
+            "dim7": [0, 3, 6, 9],
+            "aug": [0, 4, 8],
+            "sus4": [0, 5, 7],
+            "M7(9)": [0, 4, 7, 11, 2],
+            "m7(9)": [0, 3, 7, 10, 2],
+            "7(9)": [0, 4, 7, 10, 2]
+        }
+
         # コード種別と事前確率（Prior）の定義
         # トライアド (Major/Minor) を安定させ、セブンスは構成音が明確な場合のみ選択されるようバランスを最適化
         chord_types = [
@@ -172,9 +188,40 @@ class ChordEstimationStrategy(IAnalysisStrategy):
         # 初期類似度行列の計算
         similarities = torch.mm(self.templates_t, chroma_norm) # (144, n_beats)
 
-        # ---- 5. 【ロバスト・ベースルート・アテンションゲート】 ----
+        # ---- 5. 【超高速YINベース音追跡 ＆ ベースルートアテンションゲート】 ----
+        beat_bass_pitches: List[Optional[int]] = [None] * n_beats
         if has_bass:
             y_bass = signals["target_bass"].data
+            sr_bass = signals["target_bass"].sample_rate
+            
+            # 1. 超高速 YIN によるベース最低音ピッチ (F0) 推定 (4kHzダウンサンプリング)
+            try:
+                sr_down = 4000
+                y_bass_down = librosa.resample(y_bass, orig_sr=sr_bass, target_sr=sr_down)
+                hop_yin = 64
+                f0_bass = librosa.yin(
+                    y_bass_down,
+                    fmin=librosa.note_to_hz('C1'),  # 32.7 Hz
+                    fmax=librosa.note_to_hz('C4'),  # 261.6 Hz
+                    sr=sr_down,
+                    hop_length=hop_yin
+                )
+                yin_times = librosa.frames_to_time(np.arange(len(f0_bass)), sr=sr_down, hop_length=hop_yin)
+                
+                for b_idx in range(n_beats):
+                    t_st = beat_times[b_idx]
+                    t_en = beat_times[b_idx + 1] if b_idx + 1 < n_beats else (len(y_bass) / sr_bass)
+                    mask = (yin_times >= t_st) & (yin_times < t_en)
+                    seg = f0_bass[mask]
+                    valid = seg[(seg >= 30.0) & (seg <= 300.0)]
+                    if len(valid) > 0:
+                        med_f0 = float(np.median(valid))
+                        midi_val = int(round(librosa.hz_to_midi(med_f0)))
+                        beat_bass_pitches[b_idx] = midi_val % 12
+            except Exception as e:
+                print(f"[Warning] Fast YIN bass tracking fallback: {e}")
+
+            # 2. CQT + CENS ハイブリッド・ベースクロマ
             bass_tuning = librosa.estimate_tuning(y=y_bass, sr=sr)
             chroma_b_cqt = librosa.feature.chroma_cqt(y=y_bass, sr=sr, hop_length=hop_length, tuning=bass_tuning)
             chroma_b_cens = librosa.feature.chroma_cens(y=y_bass, sr=sr, hop_length=hop_length, tuning=bass_tuning)
@@ -187,7 +234,7 @@ class ChordEstimationStrategy(IAnalysisStrategy):
             bass_attn = torch.softmax(bass_t / 0.15, dim=0) # (12, n_beats)
             
             # 予測コードテンプレートの各ルート音に対応するアテンション重みを抽出し、類似度にゲート加算
-            boost_matrix = bass_attn[self.chord_roots_t, :] * 4.0
+            boost_matrix = bass_attn[self.chord_roots_t, :] * 3.5
             similarities = similarities + boost_matrix
 
         # ---- 6. 【キー検出とダイアトニック遷移の動的生成】 ----
@@ -326,36 +373,74 @@ class ChordEstimationStrategy(IAnalysisStrategy):
             
         # 8. Viterbiデコーディング
         path = librosa.sequence.viterbi(prob_np, transition_matrix)
-        raw_chords: List[str] = [self.chord_names[idx] for idx in path]
         
-        # 9. 時間平滑化ポストフィルタリング (1拍のみの孤立ノイズコード平滑化)
-        smoothed_chords = list(raw_chords)
-        if len(smoothed_chords) >= 3:
-            for i in range(1, len(smoothed_chords) - 1):
-                # 前後が同一コードで、中央のみが異なる孤立コードは前後のコードへ平滑化
-                if smoothed_chords[i-1] == smoothed_chords[i+1] and smoothed_chords[i] != smoothed_chords[i-1]:
-                    smoothed_chords[i] = smoothed_chords[i-1]
+        # 9. オンコード (分数コード / 転回形) のデコード
+        beat_chord_info: List[Dict[str, Any]] = []
+        for idx_b, path_idx in enumerate(path):
+            raw_c = self.chord_names[path_idx]
+            root_idx = self.chord_roots[path_idx]
+            root_name = self.pitch_classes[root_idx]
+            suffix = raw_c[len(root_name):]
+            
+            bass_p = beat_bass_pitches[idx_b] if idx_b < len(beat_bass_pitches) else None
+            
+            # ベース音が明確に検出され、ルート音と異なる場合のオンコード判定
+            if bass_p is not None and bass_p != root_idx:
+                bass_name = self.pitch_classes[bass_p]
+                intervals = self.chord_intervals_dict.get(suffix, [0, 4, 7])
+                chord_pitches = [(root_idx + iv) % 12 for iv in intervals]
+                
+                # ベース音がコード構成音（第3音、第5音、第7音）に含まれる場合は転回形
+                # 含まれない場合でもペダルポイント・分数コードとして認識
+                slash_name = f"{raw_c}/{bass_name}"
+                beat_chord_info.append({
+                    "chord": slash_name,
+                    "root": root_name,
+                    "bass": bass_name,
+                    "is_slash": True,
+                    "base_chord": raw_c
+                })
+            else:
+                beat_chord_info.append({
+                    "chord": raw_c,
+                    "root": root_name,
+                    "bass": root_name,
+                    "is_slash": False,
+                    "base_chord": raw_c
+                })
+        
+        # 10. 時間平滑化ポストフィルタリング (1拍のみの孤立ノイズコード平滑化)
+        if len(beat_chord_info) >= 3:
+            for i in range(1, len(beat_chord_info) - 1):
+                if beat_chord_info[i-1]["chord"] == beat_chord_info[i+1]["chord"] and beat_chord_info[i]["chord"] != beat_chord_info[i-1]["chord"]:
+                    beat_chord_info[i] = dict(beat_chord_info[i-1])
 
-        # 10. 連続区間の圧縮 (0.0秒〜楽曲末尾まで完全カバレッジ)
+        # 11. 連続区間の圧縮 (0.0秒〜楽曲末尾まで完全カバレッジ)
         total_duration = float(len(signal.data) / sr)
         chords_sequence: List[Dict[str, Any]] = []
-        if len(smoothed_chords) > 0:
-            current_chord = smoothed_chords[0]
+        if len(beat_chord_info) > 0:
+            cur = beat_chord_info[0]
             start_time = 0.0
-            for i in range(1, len(smoothed_chords)):
-                if smoothed_chords[i] != current_chord:
+            for i in range(1, len(beat_chord_info)):
+                if beat_chord_info[i]["chord"] != cur["chord"]:
                     chords_sequence.append({
                         "start_sec": round(float(start_time), 2),
                         "end_sec": round(float(beat_times[i]), 2),
-                        "chord": current_chord
+                        "chord": cur["chord"],
+                        "root": cur["root"],
+                        "bass": cur["bass"],
+                        "is_slash": cur["is_slash"]
                     })
-                    current_chord = smoothed_chords[i]
+                    cur = beat_chord_info[i]
                     start_time = beat_times[i]
                     
             chords_sequence.append({
                 "start_sec": round(float(start_time), 2),
                 "end_sec": round(total_duration, 2),
-                "chord": current_chord
+                "chord": cur["chord"],
+                "root": cur["root"],
+                "bass": cur["bass"],
+                "is_slash": cur["is_slash"]
             })
             
             # 楽曲冒頭の極小スパン (0.35秒未満の立ち上がり過渡ノイズ) があれば直後の安定コードにマージ
