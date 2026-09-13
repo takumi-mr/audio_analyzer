@@ -10,6 +10,7 @@ from analyzer.strategy.GenreClassificationStrategy import GenreClassificationStr
 from analyzer.strategy.AudioSimilarityStrategy import AudioSimilarityStrategy
 from analyzer.strategy.KeyDetectionStrategy import KeyDetectionStrategy
 from analyzer.strategy.ChordEstimationStrategy import ChordEstimationStrategy
+from analyzer.strategy.BTCChordEstimationStrategy import BTCChordEstimationStrategy
 from analyzer.strategy.ChorusDetectionStrategy import ChorusDetectionStrategy
 from analyzer.strategy.ChorusDetectionBeatSSMStrategy import ChorusDetectionBeatSSMStrategy
 from reader.LibrosaAudioReader import LibrosaAudioReader
@@ -30,9 +31,15 @@ def main(cli_args: Optional[List[str]] = None) -> None:
     parser.add_argument(
         "-s", "--strategies", 
         nargs="+", 
-        choices=["beat", "sliding-beat", "key", "chord", "chorus", "chorus-beat-ssm", "genre", "similarity", "all"],
+        choices=["beat", "sliding-beat", "key", "chord", "chord-btc", "chorus", "chorus-beat-ssm", "genre", "similarity", "all"],
         default=["all"],
         help="実行する解析戦略を指定します (複数指定可能、デフォルト: all)"
+    )
+    parser.add_argument(
+        "--chord-engine",
+        choices=["hybrid", "btc", "heuristic"],
+        default="hybrid",
+        help="コード認識エンジン (hybrid: BTC Transformer + YIN [推奨], btc: BTC単体, heuristic: ルールベースHMM)"
     )
     parser.add_argument("-r", "--reference", help="類似度計算(similarity)時に比較対象とする参照音声ファイルパス")
     parser.add_argument("--no-separation", action="store_true", help="DemucsによるAI音源分離フィルターをスキップします")
@@ -61,7 +68,8 @@ def main(cli_args: Optional[List[str]] = None) -> None:
         "beat": SimpleBeatStrategy,
         "sliding-beat": SlidingWindowBeatStrategy,
         "key": KeyDetectionStrategy,
-        "chord": ChordEstimationStrategy,
+        "chord": lambda: ChordEstimationStrategy(engine=args.chord_engine),
+        "chord-btc": BTCChordEstimationStrategy,
         "chorus": ChorusDetectionStrategy,
         "chorus-beat-ssm": ChorusDetectionBeatSSMStrategy,
         "genre": GenreClassificationStrategy,

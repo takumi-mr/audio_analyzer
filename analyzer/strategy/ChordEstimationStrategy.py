@@ -29,7 +29,28 @@ class ChordEstimationStrategy(IAnalysisStrategy):
     5. 【時間的平滑化ポストプロセッシング (Temporal Smoothing)】:
        1拍未満のノイズ的な孤立コードや過渡区間の微小スパンを自然に結合・平滑化。
     """
-    def __init__(self) -> None:
+    def __init__(self, engine: str = "hybrid") -> None:
+        self.engine = engine.lower()
+        self.btc_strategy = None
+        self.btc_model = None
+        self.btc_mean = 0.0
+        self.btc_std = 1.0
+        self.btc_vocab = {}
+
+        if self.engine in ["hybrid", "btc"]:
+            try:
+                from model.btc.btc_loader import load_btc_model
+                from analyzer.strategy.BTCChordEstimationStrategy import BTCChordEstimationStrategy
+                self.btc_strategy = BTCChordEstimationStrategy()
+                if self.btc_strategy.is_ready:
+                    self.btc_model = self.btc_strategy.model
+                    self.btc_mean = self.btc_strategy.mean
+                    self.btc_std = self.btc_strategy.std
+                    self.btc_vocab = self.btc_strategy.vocab
+            except Exception as e:
+                print(f"[ChordEstimationStrategy] BTC engine unavailable, fallback to heuristic: {e}")
+                self.btc_strategy = None
+
         self.pitch_classes: List[str] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
         self.chord_names: List[str] = []
         
@@ -113,7 +134,36 @@ class ChordEstimationStrategy(IAnalysisStrategy):
         self.priors_t = torch.tensor(self.chord_priors, dtype=torch.float32, device=self.device) # (144, 1)
         self.chord_roots_t = torch.tensor(self.chord_roots_arr, dtype=torch.long, device=self.device) # (144,)
 
+        # BTC 170クラスから ChordEstimationStrategy 144クラスへの射影テンソル M: (144, 170)
+        M = np.zeros((144, 170), dtype=np.float32)
+        btc_q_to_suffix = {
+            'maj': '', 'min': 'm', 'maj7': 'M7', 'min7': 'm7', '7': '7',
+            'dim': 'dim', 'dim7': 'dim7', 'aug': 'aug', 'sus4': 'sus4'
+        }
+        from model.btc.btc_loader import ROOT_LIST, QUALITY_LIST
+        for i in range(168):
+            r_idx = i // 14
+            q_idx = i % 14
+            q_name = QUALITY_LIST[q_idx]
+            if q_name in btc_q_to_suffix:
+                suf = btc_q_to_suffix[q_name]
+                c_name = f"{ROOT_LIST[r_idx]}{suf}"
+                if c_name in self.chord_names:
+                    h_idx = self.chord_names.index(c_name)
+                    M[h_idx, i] = 1.0
+        self.btc_mapping_t = torch.tensor(M, dtype=torch.float32, device=self.device)
+
     def analyze(self, signals: Dict[str, AudioSignal], params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        engine_to_use = self.engine
+        if params and "chord_engine" in params:
+            engine_to_use = str(params["chord_engine"]).lower()
+
+        if engine_to_use == "btc":
+            if self.btc_strategy is not None and self.btc_strategy.is_ready:
+                return self.btc_strategy.analyze(signals, params)
+            else:
+                print("[Strategy: Chord] BTC Strategy 利用不可のため、ルールベース物理HMMで解析します。")
+
         signal = None
         has_bass = "target_bass" in signals
 
@@ -236,6 +286,73 @@ class ChordEstimationStrategy(IAnalysisStrategy):
             # 予測コードテンプレートの各ルート音に対応するアテンション重みを抽出し、類似度にゲート加算
             boost_matrix = bass_attn[self.chord_roots_t, :] * 3.5
             similarities = similarities + boost_matrix
+
+        # ---- 5.5 【BTC Transformer 深層学習事後確率テンソル射影融合】 ----
+        if engine_to_use == "hybrid" and self.btc_model is not None:
+            try:
+                target_hz = 22050
+                inst_len = 10.0
+                n_timestep = 108
+                chunk_samples = int(target_hz * inst_len)
+                y_22k = librosa.resample(signal.data, orig_sr=sr, target_sr=target_hz) if sr != target_hz else signal.data
+                
+                cqt_chunks = []
+                curr_s = 0
+                while curr_s < len(y_22k):
+                    seg = y_22k[curr_s : curr_s + chunk_samples]
+                    if len(seg) < chunk_samples:
+                        seg = np.pad(seg, (0, chunk_samples - len(seg)), mode='constant')
+                    tmp = librosa.cqt(seg, sr=target_hz, n_bins=144, bins_per_octave=24, hop_length=2048)
+                    if tmp.shape[1] > n_timestep:
+                        tmp = tmp[:, :n_timestep]
+                    elif tmp.shape[1] < n_timestep:
+                        tmp = np.pad(tmp, ((0, 0), (0, n_timestep - tmp.shape[1])), mode='constant')
+                    cqt_chunks.append(tmp)
+                    curr_s += chunk_samples
+                
+                all_cqt = np.concatenate(cqt_chunks, axis=1)
+                log_cqt = np.log(np.abs(all_cqt) + 1e-6).T
+                norm_cqt = (log_cqt - self.btc_mean) / self.btc_std
+                num_inst = norm_cqt.shape[0] // n_timestep
+                
+                btc_logits_list = []
+                with torch.no_grad():
+                    f_t = torch.tensor(norm_cqt, dtype=torch.float32).unsqueeze(0).to(self.device)
+                    for t in range(num_inst):
+                        out_l = self.btc_model(f_t[:, n_timestep * t : n_timestep * (t + 1), :])
+                        btc_logits_list.append(out_l.cpu())
+                        
+                btc_logits = torch.cat(btc_logits_list, dim=1).squeeze(0) # (total_frames, 170)
+                # N と X の学習時不均衡バイアスを適正化
+                btc_logits[:, 169] -= 6.0
+                btc_logits[:, 168] -= 6.0
+                btc_probs = torch.softmax(btc_logits, dim=-1).numpy() # (total_frames, 170)
+                
+                # ビート同期プーリング
+                frame_sec = inst_len / n_timestep
+                frame_times = np.arange(btc_probs.shape[0]) * frame_sec
+                total_dur = len(signal.data) / sr
+                
+                beat_btc_p = np.zeros((170, n_beats), dtype=np.float32)
+                for b_idx in range(n_beats):
+                    t_st = beat_times[b_idx]
+                    t_en = beat_times[b_idx + 1] if b_idx + 1 < n_beats else total_dur
+                    mask = (frame_times >= t_st) & (frame_times < t_en)
+                    if np.any(mask):
+                        beat_btc_p[:, b_idx] = np.mean(btc_probs[mask, :], axis=0)
+                    else:
+                        nearest = min(int(round(t_st / frame_sec)), btc_probs.shape[0] - 1)
+                        beat_btc_p[:, b_idx] = btc_probs[nearest, :]
+                        
+                beat_btc_t = torch.tensor(beat_btc_p, dtype=torch.float32, device=self.device) # (170, n_beats)
+                # 144 クラス空間への射影
+                btc_mapped = torch.mm(self.btc_mapping_t, beat_btc_t) # (144, n_beats)
+                
+                # 物理類似度テンソルへディープニューラル事後確率を融合ブースト
+                similarities = similarities + btc_mapped * 2.5
+                print("  - [Hybrid Fusion] SOTA BTC Transformer テンソル射影融合完了 (重み: 2.5)")
+            except Exception as e:
+                print(f"  - [Warning: Hybrid Fusion] BTC融合処理フォールバック: {e}")
 
         # ---- 6. 【キー検出とダイアトニック遷移の動的生成】 ----
         # 外部パラメータ (params) から指定されたキーがあればそれを最優先活用

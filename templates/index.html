@@ -546,6 +546,17 @@
             <input type="file" id="file-input" style="display: none" accept=".wav,.mp3,.flac,.ogg,.m4a">
         </div>
 
+        <!-- コード認識エンジン選択オプション -->
+        <div id="engine-options-bar" style="display: flex; justify-content: center; gap: 0.8rem; align-items: center; margin-top: -0.5rem;">
+            <span style="font-size: 0.85rem; color: var(--text-muted);">コード認識エンジン:</span>
+            <button type="button" class="method-btn active" id="btn-engine-hybrid" onclick="setChordEngine('hybrid')">
+                ⚡ SOTA ハイブリッド (BTC Transformer + YIN) [推奨]
+            </button>
+            <button type="button" class="method-btn" id="btn-engine-heuristic" onclick="setChordEngine('heuristic')">
+                🚀 超高速物理ルールベース (CPU軽量)
+            </button>
+        </div>
+
         <!-- 解析中ローディング -->
         <div id="loading-container">
             <div class="spinner"></div>
@@ -715,9 +726,19 @@
             }
         });
 
+        let selectedChordEngine = 'hybrid';
+
+        function setChordEngine(engine) {
+            selectedChordEngine = engine;
+            document.getElementById('btn-engine-hybrid').classList.toggle('active', engine === 'hybrid');
+            document.getElementById('btn-engine-heuristic').classList.toggle('active', engine === 'heuristic');
+        }
+
         // ファイルアップロード ＆ 解析要求
         function handleFile(file) {
             uploadZone.style.display = 'none';
+            const optBar = document.getElementById('engine-options-bar');
+            if (optBar) optBar.style.display = 'none';
             loadingContainer.style.display = 'block';
             dashboard.style.display = 'none';
             if (audioPlayer) {
@@ -727,7 +748,7 @@
             const formData = new FormData();
             formData.append('file', file);
 
-            fetch('/api/analyze', {
+            fetch(`/api/analyze?chord_engine=${selectedChordEngine}`, {
                 method: 'POST',
                 body: formData
             })
@@ -792,11 +813,12 @@
             chordTimeline.innerHTML = '';
             chords.forEach((c, idx) => {
                 const card = document.createElement('div');
-                card.className = 'chord-card';
+                card.className = 'chord-card' + (c.is_slash ? ' is-slash-chord' : '');
                 card.id = `chord-card-${idx}`;
+                const slashBadge = c.is_slash ? `<span style="font-size:0.7rem; background:rgba(0,229,255,0.15); color:var(--neon-blue); border:1px solid rgba(0,229,255,0.4); border-radius:4px; padding:1px 4px; margin-left:4px;">Bass: ${c.bass}</span>` : '';
                 card.innerHTML = `
-                    <div class="chord-card-name">${c.chord}</div>
-                    <div class="chord-card-time">${c.start_sec.toFixed(1)}s</div>
+                    <div class="chord-card-name">${c.chord}${slashBadge}</div>
+                    <div class="chord-card-time">${c.start_sec.toFixed(1)}s - ${c.end_sec.toFixed(1)}s</div>
                 `;
                 
                 // クリックでその時間にジャンプ（シーク）

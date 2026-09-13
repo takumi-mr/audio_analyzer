@@ -223,3 +223,8 @@ result_**.json
 report_**.json
 **.wav
 temp_uploads/**
+*.pt
+*.pth
+*.bin
+*.onnx
+model/btc/*.pt

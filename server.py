@@ -72,7 +72,10 @@ def read_index():
         return f.read()
 
 @app.post("/api/analyze")
-async def analyze_audio(file: UploadFile = File(...)):
+async def analyze_audio(
+    file: UploadFile = File(...),
+    chord_engine: Optional[str] = "hybrid"
+):
     filename = file.filename or "uploaded_file"
     # 1. サポートフォーマットの検証
     ext = os.path.splitext(filename)[1].lower()
@@ -111,7 +114,7 @@ async def analyze_audio(file: UploadFile = File(...)):
         strategies: List[IAnalysisStrategy] = [
             SimpleBeatStrategy(),
             KeyDetectionStrategy(),
-            ChordEstimationStrategy(),
+            ChordEstimationStrategy(engine=chord_engine or "hybrid"),
             ChorusDetectionStrategy(),       # 手法A: RMS + スペクトル重心
             ChorusDetectionVocalStrategy(),  # 手法B: ボーカル分離 + 適応閾値
             ChorusDetectionSSMStrategy(),    # 手法C: 自己類似行列(SSM)構造解析

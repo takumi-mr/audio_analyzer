@@ -391,6 +391,7 @@ def run_benchmark(
     dataset_path: Optional[str] = None,
     musdb_root: Optional[str] = None,
     strategies_to_eval: Optional[List[str]] = None,
+    chord_engine: str = "hybrid",
     no_separation: bool = False,
     musdb_separation: bool = False,
     max_tracks: Optional[int] = None,
@@ -436,7 +437,7 @@ def run_benchmark(
     if "beat" in strategies_to_eval:
         strategy_instances.append(SimpleBeatStrategy())
     if "chord" in strategies_to_eval:
-        strategy_instances.append(ChordEstimationStrategy())
+        strategy_instances.append(ChordEstimationStrategy(engine=chord_engine))
     if "chorus" in strategies_to_eval:
         strategy_instances.append(ChorusDetectionBeatSSMStrategy())
 
@@ -534,7 +535,8 @@ def run_benchmark(
         print()
 
     summary = compute_summary(all_results, strategies_to_eval, musdb_separation)
-    return {"summary": summary, "tracks": all_results}
+    summary["chord_engine"] = chord_engine
+    return {"summary": summary, "tracks": all_results, "chord_engine": chord_engine}
 
 def compute_summary(tracks: List[Dict[str, Any]], strategies: List[str], musdb_separation: bool = False) -> Dict[str, Any]:
     summary: Dict[str, Any] = {"track_count": len(tracks)}
@@ -654,9 +656,10 @@ def generate_markdown_report(benchmark_data: Dict[str, Any], filepath: str) -> N
     summary = benchmark_data["summary"]
     tracks = benchmark_data["tracks"]
 
+    engine_name = summary.get("chord_engine", "hybrid")
     lines = [
         "# 音声解析エンジン 自動ベンチマークレポート\n",
-        f"**評価楽曲総数**: {summary.get('track_count', 0)} 曲\n",
+        f"**評価楽曲総数**: {summary.get('track_count', 0)} 曲 | **コード認識エンジン**: `{engine_name}`\n",
         "## 1. 総合スコアサマリー\n",
         "| 解析項目 | 指標 | スコア | 評価基準 |",
         "| :--- | :--- | :--- | :--- |"
@@ -742,6 +745,12 @@ def main():
         default=["all"],
         help="評価する解析項目を指定 (デフォルト: all)"
     )
+    parser.add_argument(
+        "--chord-engine",
+        choices=["hybrid", "btc", "heuristic"],
+        default="hybrid",
+        help="コード認識エンジン (hybrid: BTC Transformer + YIN [推奨], btc: BTC単体, heuristic: ルールベースHMM)"
+    )
     parser.add_argument("--no-separation", action="store_true", help="Demucs音源分離をスキップして直接解析 (高速)")
     parser.add_argument("-o", "--output", help="評価レポートファイル出力先 (.md または .json)")
     parser.add_argument("-v", "--verbose", action="store_true", help="詳細ログ出力")
@@ -759,6 +768,7 @@ def main():
         dataset_path=dataset_file,
         musdb_root=args.musdb,
         strategies_to_eval=selected_strategies,
+        chord_engine=args.chord_engine,
         no_separation=args.no_separation,
         musdb_separation=args.musdb_separation,
         max_tracks=args.max_tracks,
