@@ -1,10 +1,13 @@
-import numpy as np
+from typing import Any
+
 import librosa
+import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
+
 from analyzer.IAnalysisStrategy import IAnalysisStrategy
-from typing import Dict, Any, List
 from model.AudioSignal import AudioSignal
+
 
 class ChordEstimationStrategy(IAnalysisStrategy):
     """
@@ -39,20 +42,21 @@ class ChordEstimationStrategy(IAnalysisStrategy):
 
         if self.engine in ["hybrid", "btc"]:
             try:
-                from model.btc.btc_loader import load_btc_model
-                from analyzer.strategy.BTCChordEstimationStrategy import BTCChordEstimationStrategy
+                from analyzer.strategy.BTCChordEstimationStrategy import (
+                    BTCChordEstimationStrategy,
+                )
                 self.btc_strategy = BTCChordEstimationStrategy()
                 if self.btc_strategy.is_ready:
                     self.btc_model = self.btc_strategy.model
                     self.btc_mean = self.btc_strategy.mean
                     self.btc_std = self.btc_strategy.std
                     self.btc_vocab = self.btc_strategy.vocab
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 print(f"[ChordEstimationStrategy] BTC engine unavailable, fallback to heuristic: {e}")
                 self.btc_strategy = None
 
-        self.pitch_classes: List[str] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-        self.chord_names: List[str] = []
+        self.pitch_classes: list[str] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        self.chord_names: list[str] = []
         
         # 12半音ごとのメジャー／マイナーのダイアトニックマップ定義（C=0, C#=1...）
         self.diatonic_roots_major = {
@@ -97,9 +101,9 @@ class ChordEstimationStrategy(IAnalysisStrategy):
             ("Dominant7(9)", [0, 4, 7, 10, 2],   "7(9)",   0.15),
         ]
         
-        templates_list: List[np.ndarray] = []
-        priors_list: List[float] = []
-        self.chord_roots: List[int] = []
+        templates_list: list[np.ndarray] = []
+        priors_list: list[float] = []
+        self.chord_roots: list[int] = []
         
         for mode_name, intervals, suffix, prior in chord_types:
             for i in range(12):
@@ -140,7 +144,7 @@ class ChordEstimationStrategy(IAnalysisStrategy):
             'maj': '', 'min': 'm', 'maj7': 'M7', 'min7': 'm7', '7': '7',
             'dim': 'dim', 'dim7': 'dim7', 'aug': 'aug', 'sus4': 'sus4'
         }
-        from model.btc.btc_loader import ROOT_LIST, QUALITY_LIST
+        from model.btc.btc_loader import QUALITY_LIST, ROOT_LIST
         for i in range(168):
             r_idx = i // 14
             q_idx = i % 14
@@ -153,7 +157,7 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                     M[h_idx, i] = 1.0
         self.btc_mapping_t = torch.tensor(M, dtype=torch.float32, device=self.device)
 
-    def analyze(self, signals: Dict[str, AudioSignal], params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def analyze(self, signals: dict[str, AudioSignal], params: dict[str, Any] | None = None) -> dict[str, Any]:
         engine_to_use = self.engine
         if params and "chord_engine" in params:
             engine_to_use = str(params["chord_engine"]).lower()
@@ -239,7 +243,7 @@ class ChordEstimationStrategy(IAnalysisStrategy):
         similarities = torch.mm(self.templates_t, chroma_norm) # (144, n_beats)
 
         # ---- 5. 【超高速YINベース音追跡 ＆ ベースルートアテンションゲート】 ----
-        beat_bass_pitches: List[Optional[int]] = [None] * n_beats
+        beat_bass_pitches: list[int | None] = [None] * n_beats
         if has_bass:
             y_bass = signals["target_bass"].data
             sr_bass = signals["target_bass"].sample_rate
@@ -266,9 +270,9 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                     valid = seg[(seg >= 30.0) & (seg <= 300.0)]
                     if len(valid) > 0:
                         med_f0 = float(np.median(valid))
-                        midi_val = int(round(librosa.hz_to_midi(med_f0)))
+                        midi_val = round(librosa.hz_to_midi(med_f0))
                         beat_bass_pitches[b_idx] = midi_val % 12
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 print(f"[Warning] Fast YIN bass tracking fallback: {e}")
 
             # 2. CQT + CENS ハイブリッド・ベースクロマ
@@ -341,7 +345,7 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                     if np.any(mask):
                         beat_btc_p[:, b_idx] = np.mean(btc_probs[mask, :], axis=0)
                     else:
-                        nearest = min(int(round(t_st / frame_sec)), btc_probs.shape[0] - 1)
+                        nearest = min(round(t_st / frame_sec), btc_probs.shape[0] - 1)
                         beat_btc_p[:, b_idx] = btc_probs[nearest, :]
                         
                 beat_btc_t = torch.tensor(beat_btc_p, dtype=torch.float32, device=self.device) # (170, n_beats)
@@ -351,7 +355,7 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                 # 物理類似度テンソルへディープニューラル事後確率を融合ブースト
                 similarities = similarities + btc_mapped * 2.5
                 print("  - [Hybrid Fusion] SOTA BTC Transformer テンソル射影融合完了 (重み: 2.5)")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 print(f"  - [Warning: Hybrid Fusion] BTC融合処理フォールバック: {e}")
 
         # ---- 6. 【キー検出とダイアトニック遷移の動的生成】 ----
@@ -407,11 +411,6 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                 
         key_name = self.pitch_classes[best_key] + (" Major" if best_mode == "major" else " Minor")
         print(f"  - 曲全体の自動キー推定: {key_name} (ダイアトニック優遇を適用します)")
-
-        # ダイアトニックルート音高リストを取得
-        diatonic_roots = (self.diatonic_roots_major[best_key] 
-                          if best_mode == "major" 
-                          else self.diatonic_roots_minor[best_key])
         
         # 観測確率（Softmax）の算出
         scale_factor = 25.0
@@ -492,7 +491,7 @@ class ChordEstimationStrategy(IAnalysisStrategy):
         path = librosa.sequence.viterbi(prob_np, transition_matrix)
         
         # 9. オンコード (分数コード / 転回形) のデコード
-        beat_chord_info: List[Dict[str, Any]] = []
+        beat_chord_info: list[dict[str, Any]] = []
         for idx_b, path_idx in enumerate(path):
             raw_c = self.chord_names[path_idx]
             root_idx = self.chord_roots[path_idx]
@@ -504,11 +503,7 @@ class ChordEstimationStrategy(IAnalysisStrategy):
             # ベース音が明確に検出され、ルート音と異なる場合のオンコード判定
             if bass_p is not None and bass_p != root_idx:
                 bass_name = self.pitch_classes[bass_p]
-                intervals = self.chord_intervals_dict.get(suffix, [0, 4, 7])
-                chord_pitches = [(root_idx + iv) % 12 for iv in intervals]
-                
-                # ベース音がコード構成音（第3音、第5音、第7音）に含まれる場合は転回形
-                # 含まれない場合でもペダルポイント・分数コードとして認識
+                # 転回形・ペダルポイント・分数コードとして認識
                 slash_name = f"{raw_c}/{bass_name}"
                 beat_chord_info.append({
                     "chord": slash_name,
@@ -534,7 +529,7 @@ class ChordEstimationStrategy(IAnalysisStrategy):
 
         # 11. 連続区間の圧縮 (0.0秒〜楽曲末尾まで完全カバレッジ)
         total_duration = float(len(signal.data) / sr)
-        chords_sequence: List[Dict[str, Any]] = []
+        chords_sequence: list[dict[str, Any]] = []
         if len(beat_chord_info) > 0:
             cur = beat_chord_info[0]
             start_time = 0.0

@@ -1,9 +1,12 @@
-import numpy as np
+from typing import Any
+
 import librosa
+import numpy as np
 import scipy.ndimage
+
 from analyzer.IAnalysisStrategy import IAnalysisStrategy
-from typing import Dict, Any, List
 from model.AudioSignal import AudioSignal
+
 
 class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
     """
@@ -19,9 +22,16 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
     5. スコア統合を掛け算から「重み付き足し算」へ変更し、厳しい足切りを回避して検出数をSSM Structureと同等まで向上
     6. 閾値を0.15σに引き下げ、最小継続拍数を8拍に緩和し、隣接マージの許容ギャップを6秒に拡大
     """
-    def analyze(self, signals: Dict[str, AudioSignal], params: Dict[str, Any] | None = None) -> Dict[str, Any]:
-        # 1. 必要なシグナルを取得
-        y_vocal = signals["target_vocal"].data if "target_vocal" in signals else signals["target"].data
+    def analyze(self, signals: dict[str, AudioSignal], params: dict[str, Any] | None = None) -> dict[str, Any]:
+        # 1. 必要なシグナルを安全に取得
+        if not signals:
+            return {"status": "error", "message": "No audio signal available."}
+
+        target_sig = signals.get("target") or signals.get("target_vocal") or next(iter(signals.values()), None)
+        if target_sig is None or len(target_sig.data) == 0:
+            return {"status": "error", "message": "No audio signal available."}
+
+        y_vocal = signals["target_vocal"].data if "target_vocal" in signals else target_sig.data
         y_drums = signals["target_drums"].data if "target_drums" in signals else np.zeros_like(y_vocal)
         y_bass = signals["target_bass"].data if "target_bass" in signals else np.zeros_like(y_vocal)
         y_other = signals["target_other"].data if "target_other" in signals else np.zeros_like(y_vocal)
@@ -29,9 +39,12 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
         if "target" in signals:
             y_full = signals["target"].data
             sr = signals["target"].sample_rate
-        else:
+        elif "target_vocal" in signals:
             y_full = y_vocal + y_drums + y_bass + y_other
             sr = signals["target_vocal"].sample_rate
+        else:
+            y_full = target_sig.data
+            sr = target_sig.sample_rate
 
         print("[Strategy: Chorus] ビート同期SSMと対角パス強調を用いたサビ検出を開始します...")
 
@@ -39,7 +52,7 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             # 2. ビートトラッキング
             y_rhythm = y_drums + y_bass if "target_drums" in signals else y_full
             onset_env = librosa.onset.onset_strength(y=y_rhythm, sr=sr)
-            tempo, beat_frames = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr, start_bpm=100.0)
+            _, beat_frames = librosa.beat.beat_track(onset_envelope=onset_env, sr=sr, start_bpm=100.0)
             
             if not isinstance(beat_frames, np.ndarray):
                 beat_frames = np.array(beat_frames)
@@ -174,7 +187,7 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
                 "chorus_method_beat_ssm": "beat_sync_path_enhanced"
             }
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"[Warning] BeatSSM Chorus detection failed: {e}. ダイナミクス適応フォールバックを実行します。")
             try:
                 fallback_sections = self._fallback_dynamics_chorus(y_full, y_vocal, y_rhythm, sr)
@@ -187,7 +200,7 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
                     "chorus_confidence_beat_ssm": 0.65,
                     "chorus_method_beat_ssm": "dynamics_adaptive_fallback"
                 }
-            except Exception as e2:
+            except Exception:  # noqa: BLE001
                 return {
                     "status": "success",
                     "chorus_sections_beat_ssm": [],
@@ -195,7 +208,7 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
                     "chorus_method_beat_ssm": "beat_sync_path_enhanced_fallback"
                 }
 
-    def _fallback_dynamics_chorus(self, y_full: np.ndarray, y_vocal: np.ndarray, y_rhythm: np.ndarray, sr: int) -> List[Dict[str, float]]:
+    def _fallback_dynamics_chorus(self, y_full: np.ndarray, y_vocal: np.ndarray, y_rhythm: np.ndarray, sr: int) -> list[dict[str, float]]:
         """
         短尺音源（拍数が少ない）または構造解析が困難な場合の高精度ダイナミクスサビ検出フォールバック。
         音圧 (RMS)、スペクトル重心 (Centroid)、リズム音圧の時系列から最も盛り上がる区間（サビ/ドロップ）を抽出。

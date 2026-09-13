@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """
 Audio Analyzer Benchmark Tool (MIR & MUSDB18 自動精度検証スクリプト)
 
@@ -10,29 +9,29 @@ Audio Analyzer Benchmark Tool (MIR & MUSDB18 自動精度検証スクリプト)
 """
 
 import argparse
+import glob
 import json
 import os
 import sys
-import glob
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Any
+
 import numpy as np
 
 # コア解析コンポーネント
-from analyzer.AudioAnalyzer import AudioAnalyzer
-from analyzer.IAnalysisStrategy import IAnalysisStrategy
-from analyzer.strategy.SimpleBeatStrategy import SimpleBeatStrategy
-from analyzer.strategy.KeyDetectionStrategy import KeyDetectionStrategy
-from analyzer.strategy.ChordEstimationStrategy import ChordEstimationStrategy
-from analyzer.strategy.ChorusDetectionBeatSSMStrategy import ChorusDetectionBeatSSMStrategy
-from reader.LibrosaAudioReader import LibrosaAudioReader
-from writer.IResultWriter import IResultWriter
-from model.AudioSignal import AudioSignal
-
-from analyzer.filter.IAudioFilter import IAudioFilter
 from analyzer.filter.BandSplitterFilter import BandSplitterFilter
 from analyzer.filter.CompressorFilter import CompressorFilter
+from analyzer.filter.IAudioFilter import IAudioFilter
 from analyzer.filter.SourceSeparatorFilter import SourceSeparatorFilter
-
+from analyzer.IAnalysisStrategy import IAnalysisStrategy
+from analyzer.strategy.ChordEstimationStrategy import ChordEstimationStrategy
+from analyzer.strategy.ChorusDetectionBeatSSMStrategy import (
+    ChorusDetectionBeatSSMStrategy,
+)
+from analyzer.strategy.KeyDetectionStrategy import KeyDetectionStrategy
+from analyzer.strategy.SimpleBeatStrategy import SimpleBeatStrategy
+from model.AudioSignal import AudioSignal
+from reader.LibrosaAudioReader import LibrosaAudioReader
+from writer.IResultWriter import IResultWriter
 
 # ==============================================================================
 # 音楽理論 & MIRメトリクス計算モジュール
@@ -55,12 +54,12 @@ PITCH_MAP = {
 
 PITCH_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
-def parse_pitch_class(note_str: str) -> Optional[int]:
+def parse_pitch_class(note_str: str) -> int | None:
     """音名文字列を 0〜11 のピッチクラスに変換"""
     clean = note_str.strip().upper()
     return PITCH_MAP.get(clean, None)
 
-def parse_chord(chord_name: str) -> Tuple[Optional[int], str, str]:
+def parse_chord(chord_name: str) -> tuple[int | None, str, str]:
     """
     コード名を (ルート音ピッチクラス, トライアド種別, 詳細クオリティ) に分解。
     スラッシュコード (例: C/E, Gm/Bb) にも対応。
@@ -69,11 +68,9 @@ def parse_chord(chord_name: str) -> Tuple[Optional[int], str, str]:
     if not name or name.upper() in ["N", "NO CHORD", "NONE"]:
         return None, "none", "none"
         
-    slash_bass = None
     if "/" in name:
         parts = name.split("/", 1)
         name = parts[0].strip()
-        slash_bass = parse_pitch_class(parts[1].strip())
 
     root_pitch = None
     root_len = 0
@@ -131,7 +128,7 @@ def parse_chord(chord_name: str) -> Tuple[Optional[int], str, str]:
         
     return root_pitch, triad, quality
 
-def evaluate_chords(gt_spans: List[Dict[str, Any]], pred_spans: List[Dict[str, Any]]) -> Dict[str, float]:
+def evaluate_chords(gt_spans: list[dict[str, Any]], pred_spans: list[dict[str, Any]]) -> dict[str, float]:
     """
     時間重み付きコード一致率 (WCSR: Weighted Chord Symbol Recall) の計算
     """
@@ -164,13 +161,12 @@ def evaluate_chords(gt_spans: List[Dict[str, Any]], pred_spans: List[Dict[str, A
                 
             p_root, p_triad, p_qual = parse_chord(pred["chord"])
             
-            if gt_root is not None and p_root is not None:
-                if gt_root == p_root:
-                    root_matched_duration += overlap
-                    if gt_triad == p_triad:
-                        triad_matched_duration += overlap
-                        if gt_qual == p_qual:
-                            exact_matched_duration += overlap
+            if gt_root is not None and p_root is not None and gt_root == p_root:
+                root_matched_duration += overlap
+                if gt_triad == p_triad:
+                    triad_matched_duration += overlap
+                    if gt_qual == p_qual:
+                        exact_matched_duration += overlap
 
     if total_gt_duration <= 0.0:
         return {"exact_wcsr": 0.0, "triad_wcsr": 0.0, "root_wcsr": 0.0, "total_duration": 0.0}
@@ -182,11 +178,11 @@ def evaluate_chords(gt_spans: List[Dict[str, Any]], pred_spans: List[Dict[str, A
         "total_duration": round(total_gt_duration, 2)
     }
 
-def evaluate_key(gt_key_str: str, pred_key_str: str) -> Dict[str, Any]:
+def evaluate_key(gt_key_str: str, pred_key_str: str) -> dict[str, Any]:
     """
     MIREX 世界標準キー評価スコアリング
     """
-    def parse_key(k_str: str) -> Tuple[Optional[int], str]:
+    def parse_key(k_str: str) -> tuple[int | None, str]:
         parts = k_str.strip().split()
         if not parts:
             return None, "major"
@@ -203,23 +199,22 @@ def evaluate_key(gt_key_str: str, pred_key_str: str) -> Dict[str, Any]:
     if gt_pitch == pred_pitch and gt_mode == pred_mode:
         return {"score": 1.0, "match_type": "Exact Match", "exact": True}
 
-    if gt_mode == pred_mode:
-        if (gt_pitch + 7) % 12 == pred_pitch or (gt_pitch + 5) % 12 == pred_pitch:
-            return {"score": 0.5, "match_type": "Fifth Match", "exact": False}
+    if gt_mode == pred_mode and ((gt_pitch + 7) % 12 == pred_pitch or (gt_pitch + 5) % 12 == pred_pitch):
+        return {"score": 0.5, "match_type": "Fifth Match", "exact": False}
 
-    if gt_mode == "major" and pred_mode == "minor":
-        if (gt_pitch - 3) % 12 == pred_pitch:
-            return {"score": 0.3, "match_type": "Relative Match", "exact": False}
-    elif gt_mode == "minor" and pred_mode == "major":
-        if (gt_pitch + 3) % 12 == pred_pitch:
-            return {"score": 0.3, "match_type": "Relative Match", "exact": False}
+    is_relative = (
+        (gt_mode == "major" and pred_mode == "minor" and (gt_pitch - 3) % 12 == pred_pitch)
+        or (gt_mode == "minor" and pred_mode == "major" and (gt_pitch + 3) % 12 == pred_pitch)
+    )
+    if is_relative:
+        return {"score": 0.3, "match_type": "Relative Match", "exact": False}
 
     if gt_pitch == pred_pitch and gt_mode != pred_mode:
         return {"score": 0.2, "match_type": "Parallel Match", "exact": False}
 
     return {"score": 0.0, "match_type": "Mismatch", "exact": False}
 
-def evaluate_tempo(gt_bpm: float, pred_bpm: float) -> Dict[str, Any]:
+def evaluate_tempo(gt_bpm: float, pred_bpm: float) -> dict[str, Any]:
     """
     テンポ / BPM 検出精度 (P-Score: ±4%, ±8%, 倍テン/半テン許容)
     """
@@ -241,7 +236,7 @@ def evaluate_tempo(gt_bpm: float, pred_bpm: float) -> Dict[str, Any]:
         "relative_error": round(err * 100.0, 2)
     }
 
-def evaluate_chorus(gt_sections: List[Dict[str, Any]], pred_sections: List[Dict[str, Any]]) -> Dict[str, float]:
+def evaluate_chorus(gt_sections: list[dict[str, Any]], pred_sections: list[dict[str, Any]]) -> dict[str, float]:
     """
     サビ検出の Overlap 評価 (Precision, Recall, F1-measure)
     """
@@ -278,14 +273,14 @@ def evaluate_chorus(gt_sections: List[Dict[str, Any]], pred_sections: List[Dict[
 # ==============================================================================
 
 def evaluate_source_separation(
-    pred_signals: Dict[str, AudioSignal],
-    gt_paths: Dict[str, str],
+    pred_signals: dict[str, AudioSignal],
+    gt_paths: dict[str, str],
     reader: LibrosaAudioReader
-) -> Dict[str, Dict[str, float]]:
+) -> dict[str, dict[str, float]]:
     """
     Demucs音源分離の推定ステムと正解ステムの波形相関度(r)およびSDR(dB)を算出
     """
-    results: Dict[str, Dict[str, float]] = {}
+    results: dict[str, dict[str, float]] = {}
     
     stem_map = {
         "vocals": "target_vocal",
@@ -335,7 +330,7 @@ def evaluate_source_separation(
 
     return results
 
-def scan_musdb_tracks(musdb_root: str, max_tracks: Optional[int] = None) -> List[Dict[str, Any]]:
+def scan_musdb_tracks(musdb_root: str, max_tracks: int | None = None) -> list[dict[str, Any]]:
     """
     MUSDB18 / MUSDB18-HQ のディレクトリ構造をスキャンしてトラック情報を取得
     """
@@ -378,8 +373,8 @@ def scan_musdb_tracks(musdb_root: str, max_tracks: Optional[int] = None) -> List
 # ==============================================================================
 class InMemoryWriter(IResultWriter):
     def __init__(self):
-        self.result: Dict[str, Any] = {}
-    def write(self, filepath: str, result: Dict[str, Any]) -> None:
+        self.result: dict[str, Any] = {}
+    def write(self, filepath: str, result: dict[str, Any]) -> None:
         self.result.update(result)
 
 
@@ -388,15 +383,15 @@ class InMemoryWriter(IResultWriter):
 # ==============================================================================
 
 def run_benchmark(
-    dataset_path: Optional[str] = None,
-    musdb_root: Optional[str] = None,
-    strategies_to_eval: Optional[List[str]] = None,
+    dataset_path: str | None = None,
+    musdb_root: str | None = None,
+    strategies_to_eval: list[str] | None = None,
     chord_engine: str = "hybrid",
     no_separation: bool = False,
     musdb_separation: bool = False,
-    max_tracks: Optional[int] = None,
+    max_tracks: int | None = None,
     verbose: bool = False
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     
     strategies_to_eval = strategies_to_eval or ["chord", "key", "beat", "chorus"]
 
@@ -423,15 +418,13 @@ def run_benchmark(
     mem_writer = InMemoryWriter()
 
     # フィルターチェーン
-    filters: List[IAudioFilter] = []
-    sep_filter: Optional[SourceSeparatorFilter] = None
+    filters: list[IAudioFilter] = []
     if not no_separation:
-        sep_filter = SourceSeparatorFilter(target_key="target")
-        filters.append(sep_filter)
+        filters.append(SourceSeparatorFilter(target_key="target"))
     filters.append(BandSplitterFilter(target_key="target_drums", cutoff_hz=150.0))
     filters.append(CompressorFilter(target_key="target_drums_low", threshold=0.2, ratio=3.0))
 
-    strategy_instances: List[IAnalysisStrategy] = []
+    strategy_instances: list[IAnalysisStrategy] = []
     if "key" in strategies_to_eval:
         strategy_instances.append(KeyDetectionStrategy())
     if "beat" in strategies_to_eval:
@@ -441,16 +434,14 @@ def run_benchmark(
     if "chorus" in strategies_to_eval:
         strategy_instances.append(ChorusDetectionBeatSSMStrategy())
 
-    analyzer = AudioAnalyzer(reader, mem_writer, SimpleBeatStrategy(), filters=filters)
-
     all_results = []
-    print(f"\n=======================================================")
+    print("\n=======================================================")
     print(f" 音声解析自動ベンチマーク実行開始 (全 {len(data_items)} 曲)")
     print(f" モード: {'MUSDB18 Dataset' if is_musdb_mode else 'Custom Annotations'}")
     print(f" 評価項目: {strategies_to_eval} | 音源分離: {'OFF' if no_separation else 'ON'}")
     if musdb_separation:
-        print(f" 音源分離SDR評価: ON")
-    print(f"=======================================================\n")
+        print(" 音源分離SDR評価: ON")
+    print("=======================================================\n")
 
     for idx, item in enumerate(data_items, 1):
         title = item.get("title", f"Track {idx}")
@@ -483,12 +474,12 @@ def run_benchmark(
                     if k != "status":
                         merged_result[k] = v
             mem_writer.result = merged_result
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(f"  [Error] 解析失敗: {e}", file=sys.stderr)
             continue
 
         pred = mem_writer.result
-        item_scores: Dict[str, Any] = {"title": title, "audio": audio_path}
+        item_scores: dict[str, Any] = {"title": title, "audio": audio_path}
 
         # 1. コード進行評価
         if "chord" in strategies_to_eval and "chords" in item:
@@ -527,7 +518,7 @@ def run_benchmark(
         if musdb_separation and "stems" in item:
             sep_res = evaluate_source_separation(signals, item["stems"], reader)
             item_scores["separation"] = sep_res
-            print(f"  - [Separation (Demucs)]")
+            print("  - [Separation (Demucs)]")
             for stem_k, s_val in sep_res.items():
                 print(f"      {stem_k:<7}: 相関度 {s_val['correlation_pct']:>5.1f}% | SDR: {s_val['sdr_db']:>5.1f} dB")
 
@@ -538,8 +529,8 @@ def run_benchmark(
     summary["chord_engine"] = chord_engine
     return {"summary": summary, "tracks": all_results, "chord_engine": chord_engine}
 
-def compute_summary(tracks: List[Dict[str, Any]], strategies: List[str], musdb_separation: bool = False) -> Dict[str, Any]:
-    summary: Dict[str, Any] = {"track_count": len(tracks)}
+def compute_summary(tracks: list[dict[str, Any]], strategies: list[str], musdb_separation: bool = False) -> dict[str, Any]:
+    summary: dict[str, Any] = {"track_count": len(tracks)}
 
     if not tracks:
         return summary
@@ -587,7 +578,7 @@ def compute_summary(tracks: List[Dict[str, Any]], strategies: List[str], musdb_s
     if musdb_separation:
         sep_tracks = [t["separation"] for t in tracks if "separation" in t]
         if sep_tracks:
-            stem_summary: Dict[str, Any] = {}
+            stem_summary: dict[str, Any] = {}
             for stem in ["vocals", "drums", "bass", "other"]:
                 corr_list = [t[stem]["correlation_pct"] for t in sep_tracks if stem in t]
                 sdr_list = [t[stem]["sdr_db"] for t in sep_tracks if stem in t]
@@ -605,7 +596,7 @@ def compute_summary(tracks: List[Dict[str, Any]], strategies: List[str], musdb_s
 # レポート出力モジュール (Console / Markdown)
 # ==============================================================================
 
-def print_console_summary(benchmark_data: Dict[str, Any]) -> None:
+def print_console_summary(benchmark_data: dict[str, Any]) -> None:
     summary = benchmark_data["summary"]
     print("=======================================================")
     print(" 総合ベンチマーク結果サマリー")
@@ -614,7 +605,7 @@ def print_console_summary(benchmark_data: Dict[str, Any]) -> None:
 
     if "chord" in summary:
         c = summary["chord"]
-        print(f" [コード進行推定 (WCSR)]")
+        print(" [コード進行推定 (WCSR)]")
         print(f"   - 完全一致率 (Exact WCSR) : {c['mean_exact_wcsr']:>6.2f} %")
         print(f"   - トライアド一致率 (Triad) : {c['mean_triad_wcsr']:>6.2f} %")
         print(f"   - ルート音一致率 (Root)   : {c['mean_root_wcsr']:>6.2f} %")
@@ -622,14 +613,14 @@ def print_console_summary(benchmark_data: Dict[str, Any]) -> None:
 
     if "key" in summary:
         k = summary["key"]
-        print(f" [主キー判定 (Key Detection)]")
+        print(" [主キー判定 (Key Detection)]")
         print(f"   - 完全一致率 (Exact Match): {k['exact_accuracy']:>6.2f} %")
         print(f"   - MIREX 重み付きスコア   : {k['mirex_weighted_score']:>6.3f} / 1.000")
         print()
 
     if "tempo" in summary:
         t = summary["tempo"]
-        print(f" [テンポ・BPM検出 (Beat/Tempo)]")
+        print(" [テンポ・BPM検出 (Beat/Tempo)]")
         print(f"   - P-Score (±4% 許容)      : {t['p_score_4_accuracy']:>6.2f} %")
         print(f"   - P-Score (±8% 許容)      : {t['p_score_8_accuracy']:>6.2f} %")
         print(f"   - 倍テン許容一致率        : {t['octave_invariant_accuracy']:>6.2f} %")
@@ -637,7 +628,7 @@ def print_console_summary(benchmark_data: Dict[str, Any]) -> None:
 
     if "chorus" in summary:
         ch = summary["chorus"]
-        print(f" [サビ自動検出 (Chorus Detection)]")
+        print(" [サビ自動検出 (Chorus Detection)]")
         print(f"   - 適合率 (Precision)      : {ch['mean_precision']:>6.2f} %")
         print(f"   - 再現率 (Recall)         : {ch['mean_recall']:>6.2f} %")
         print(f"   - F1スコア (F-measure)    : {ch['mean_f1']:>6.2f} %")
@@ -645,14 +636,14 @@ def print_console_summary(benchmark_data: Dict[str, Any]) -> None:
 
     if "separation" in summary:
         s = summary["separation"]
-        print(f" [MUSDB18 音源分離精度 (Demucs Evaluation)]")
+        print(" [MUSDB18 音源分離精度 (Demucs Evaluation)]")
         for stem_name, vals in s.items():
             print(f"   - {stem_name.capitalize():<7}: 相関度 {vals['mean_correlation_pct']:>5.1f}% | 平均 SDR: {vals['mean_sdr_db']:>5.2f} dB")
         print()
 
     print("=======================================================\n")
 
-def generate_markdown_report(benchmark_data: Dict[str, Any], filepath: str) -> None:
+def generate_markdown_report(benchmark_data: dict[str, Any], filepath: str) -> None:
     summary = benchmark_data["summary"]
     tracks = benchmark_data["tracks"]
 
