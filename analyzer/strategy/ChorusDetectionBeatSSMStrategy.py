@@ -47,9 +47,19 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             beat_times = librosa.frames_to_time(beat_frames, sr=sr)
             n_beats = len(beat_frames)
 
-            # 曲が短すぎる、または拍が少なすぎる場合の安全なフォールバック
+            # 曲が短すぎる、または拍が少なすぎる場合のダイナミクス適応フォールバック
             if n_beats < 16:
-                raise ValueError("Too few beats for structural analysis.")
+                print(f"[Strategy: Chorus] 拍数が少ないため ({n_beats} 拍)、ダイナミクス適応フォールバックでサビを特定します。")
+                fallback_sections = self._fallback_dynamics_chorus(y_full, y_vocal, y_rhythm, sr)
+                return {
+                    "status": "success",
+                    "chorus_sections_beat_ssm": [
+                        {"start_sec": round(s["start_sec"], 2), "end_sec": round(s["end_sec"], 2)}
+                        for s in fallback_sections
+                    ],
+                    "chorus_confidence_beat_ssm": 0.75,
+                    "chorus_method_beat_ssm": "dynamics_adaptive_fallback"
+                }
 
             # 3. 特徴量抽出とビート同期 (chroma_cens + mfcc)
             chroma = librosa.feature.chroma_cens(y=y_other + y_vocal, sr=sr)
@@ -67,7 +77,7 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
 
             # 5. 対角パス強調 (Path Enhancement)
             # 16拍 (約4小節) に戻し、 Hann 窓による端の過度な減衰を防ぎます
-            R_enh = librosa.segment.path_enhance(R, 16, window='hann')
+            R_enh = librosa.segment.path_enhance(R, min(16, max(4, n_beats // 2)), window='hann')
             
             # 各ビートの繰り返しスコア
             rep_score = np.max(R_enh, axis=1)
@@ -98,23 +108,25 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             # 7. インスト曲 (無ボーカル曲) に応じた適応型 Salience
             full_rms = librosa.feature.rms(y=y_full)[0]
             vocal_ratio = np.mean(vocal_rms) / (np.mean(full_rms) + 1e-8)
+            full_sync = librosa.util.sync(full_rms, beat_frames.tolist(), aggregate=np.max)[0]
+            full_sync = normalize(full_sync)
             
             if vocal_ratio < 0.08:
-                # インスト曲: リズム(0.60) + 明るさ/スペクトル重心(0.40)
-                salience = 0.60 * rhythm_sync + 0.40 * centroid_sync
+                # インスト曲: 全体音圧/ダイナミクス(0.45) + 高音域の広がり/明るさ(0.35) + リズムアタック(0.20)
+                salience = 0.45 * full_sync + 0.35 * centroid_sync + 0.20 * rhythm_sync
                 print(f"[Strategy: Chorus] インスト曲と判定しました。 (Vocal ratio: {vocal_ratio:.3f})")
+                chorus_score = 0.30 * rep_score + 0.70 * salience
             else:
-                # ボーカルあり曲: ボーカル(0.50) + リズム(0.30) + 明るさ(0.20)
-                salience = 0.50 * vocal_sync + 0.30 * rhythm_sync + 0.20 * centroid_sync
-            
-            # 繰り返し度と存在感の「和」(掛け算による過度な足切りを回避し、検出数を向上)
-            chorus_score = 0.5 * rep_score + 0.5 * salience
+                # ボーカルあり曲: ボーカル(0.45) + 全体音圧(0.25) + リズム(0.20) + 明るさ(0.10)
+                salience = 0.45 * vocal_sync + 0.25 * full_sync + 0.20 * rhythm_sync + 0.10 * centroid_sync
+                chorus_score = 0.50 * rep_score + 0.50 * salience
 
-            # 短いノイズを消すために8拍（約2小節）のメディアンフィルタで平滑化
-            chorus_score_smooth = scipy.ndimage.median_filter(chorus_score, size=8)
+            # 短いノイズを消すためにメディアンフィルタで平滑化
+            filter_size = min(8, max(3, n_beats // 4))
+            chorus_score_smooth = scipy.ndimage.median_filter(chorus_score, size=filter_size)
 
             # 8. サビ区間の抽出
-            # 閾値係数を0.15σに設定 (SSM Structureと同等レベルまで緩和して検出数を確保)
+            # 閾値係数を0.15σに設定
             threshold = np.mean(chorus_score_smooth) + 0.15 * np.std(chorus_score_smooth)
             is_chorus = chorus_score_smooth > threshold
 
@@ -122,8 +134,8 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             in_sec = False
             start_b = 0
             
-            # サビの最小継続拍数: 8拍 (約2小節。短いサビや境界削れによる消失を防ぐ)
-            min_beats_for_chorus = 8
+            # サビの最小継続拍数: 楽曲長に応じて動的調整 (短尺曲では4拍〜6拍)
+            min_beats_for_chorus = 8 if n_beats >= 32 else max(4, n_beats // 5)
 
             for b in range(n_beats):
                 if is_chorus[b] and not in_sec:
@@ -137,12 +149,9 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             if in_sec and n_beats - start_b >= min_beats_for_chorus:
                 sections.append({"start_sec": float(beat_times[start_b]), "end_sec": float(beat_times[-1])})
 
-            # 安全策: 何も検出されなかった場合は最もスコアが高い場所を強制出力
+            # 安全策: 何も検出されなかった場合はダイナミクスフォールバック
             if not sections:
-                best_b = int(np.argmax(chorus_score_smooth))
-                start_b = max(0, best_b - 16)
-                end_b = min(n_beats - 1, best_b + 16)
-                sections.append({"start_sec": float(beat_times[start_b]), "end_sec": float(beat_times[end_b])})
+                sections = self._fallback_dynamics_chorus(y_full, y_vocal, y_rhythm, sr)
 
             # 9. 隣接する区間のマージ (マージギャップを6.0秒に拡大し、ブレイク等による分断を防止)
             merged_sections = []
@@ -163,11 +172,95 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
             }
 
         except Exception as e:
-            # エラー時はクラッシュさせず、空の検出結果として安全に返す
-            print(f"[Warning] BeatSSM Chorus detection failed: {e}. Falling back to empty result.")
-            return {
-                "status": "success",
-                "chorus_sections_beat_ssm": [],
-                "chorus_confidence_beat_ssm": 0.0,
-                "chorus_method_beat_ssm": "beat_sync_path_enhanced_fallback"
-            }
+            print(f"[Warning] BeatSSM Chorus detection failed: {e}. ダイナミクス適応フォールバックを実行します。")
+            try:
+                fallback_sections = self._fallback_dynamics_chorus(y_full, y_vocal, y_rhythm, sr)
+                return {
+                    "status": "success",
+                    "chorus_sections_beat_ssm": [
+                        {"start_sec": round(s["start_sec"], 2), "end_sec": round(s["end_sec"], 2)}
+                        for s in fallback_sections
+                    ],
+                    "chorus_confidence_beat_ssm": 0.65,
+                    "chorus_method_beat_ssm": "dynamics_adaptive_fallback"
+                }
+            except Exception as e2:
+                return {
+                    "status": "success",
+                    "chorus_sections_beat_ssm": [],
+                    "chorus_confidence_beat_ssm": 0.0,
+                    "chorus_method_beat_ssm": "beat_sync_path_enhanced_fallback"
+                }
+
+    def _fallback_dynamics_chorus(self, y_full: np.ndarray, y_vocal: np.ndarray, y_rhythm: np.ndarray, sr: int) -> List[Dict[str, float]]:
+        """
+        短尺音源（拍数が少ない）または構造解析が困難な場合の高精度ダイナミクスサビ検出フォールバック。
+        音圧 (RMS)、スペクトル重心 (Centroid)、リズム音圧の時系列から最も盛り上がる区間（サビ/ドロップ）を抽出。
+        """
+        hop_length = 512
+        full_rms = librosa.feature.rms(y=y_full, hop_length=hop_length)[0]
+        centroid = librosa.feature.spectral_centroid(y=y_full, sr=sr, hop_length=hop_length)[0]
+        vocal_rms = librosa.feature.rms(y=y_vocal, hop_length=hop_length)[0]
+        rhythm_rms = librosa.feature.rms(y=y_rhythm, hop_length=hop_length)[0]
+
+        def norm_arr(arr):
+            rng = arr.max() - arr.min()
+            return (arr - arr.min()) / (rng if rng > 0 else 1.0)
+
+        n_frames = len(full_rms)
+        total_duration = len(y_full) / sr
+        
+        # ボーカル存在比率
+        vocal_ratio = np.mean(vocal_rms) / (np.mean(full_rms) + 1e-8)
+        if vocal_ratio < 0.08:
+            dynamics = 0.50 * norm_arr(full_rms) + 0.30 * norm_arr(rhythm_rms) + 0.20 * norm_arr(centroid)
+        else:
+            dynamics = 0.40 * norm_arr(vocal_rms) + 0.35 * norm_arr(full_rms) + 0.25 * norm_arr(centroid)
+            
+        # 約1秒の平滑化 (約43フレーム)
+        win_size = max(5, int(sr / hop_length))
+        smooth_dyn = scipy.ndimage.gaussian_filter1d(dynamics, sigma=win_size / 2)
+        
+        # 閾値: 平均値 + 0.15 * 標準偏差
+        thresh = np.mean(smooth_dyn) + 0.15 * np.std(smooth_dyn)
+        is_high = smooth_dyn > thresh
+        
+        # 連続区間
+        times = librosa.frames_to_time(np.arange(n_frames), sr=sr, hop_length=hop_length)
+        sections = []
+        in_sec = False
+        start_t = 0.0
+        
+        min_dur = min(2.0, total_duration * 0.15)
+        
+        for f in range(n_frames):
+            if is_high[f] and not in_sec:
+                in_sec = True
+                start_t = times[f]
+            elif not is_high[f] and in_sec:
+                in_sec = False
+                end_t = times[f]
+                if end_t - start_t >= min_dur:
+                    sections.append({"start_sec": float(start_t), "end_sec": float(end_t)})
+                    
+        if in_sec and total_duration - start_t >= min_dur:
+            sections.append({"start_sec": float(start_t), "end_sec": float(total_duration)})
+            
+        # 1つも区間が得られない場合は、最大ピークを中心とした区間
+        if not sections:
+            peak_idx = int(np.argmax(smooth_dyn))
+            peak_t = times[peak_idx]
+            span = min(total_duration * 0.4, 8.0)
+            st = max(0.0, peak_t - span / 2)
+            et = min(total_duration, peak_t + span / 2)
+            sections.append({"start_sec": float(st), "end_sec": float(et)})
+            
+        # マージ
+        merged = []
+        for sec in sections:
+            if merged and sec["start_sec"] - merged[-1]["end_sec"] <= 2.0:
+                merged[-1]["end_sec"] = sec["end_sec"]
+            else:
+                merged.append(sec)
+                
+        return merged

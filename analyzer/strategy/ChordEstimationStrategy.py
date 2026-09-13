@@ -48,8 +48,8 @@ class ChordEstimationStrategy(IAnalysisStrategy):
         chord_types = [
             ("Major",        [0, 4, 7],         "",       1.00),
             ("Minor",        [0, 3, 7],         "m",      1.00),
-            ("Major7",       [0, 4, 7, 11],     "M7",     0.75),
-            ("Minor7",       [0, 3, 7, 10],     "m7",     0.75),
+            ("Major7",       [0, 4, 7, 11],     "M7",     0.80),
+            ("Minor7",       [0, 3, 7, 10],     "m7",     0.85),
             ("Dominant7",    [0, 4, 7, 10],     "7",      0.75),
             ("Diminished",   [0, 3, 6],         "dim",    0.50),
             ("Diminished7",  [0, 3, 6, 9],      "dim7",   0.45),
@@ -191,29 +191,55 @@ class ChordEstimationStrategy(IAnalysisStrategy):
             similarities = similarities + boost_matrix
 
         # ---- 6. 【キー検出とダイアトニック遷移の動的生成】 ----
-        mean_chroma = torch.mean(chroma_norm, dim=1) # (12,)
-        major_profile = torch.tensor([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88], device=self.device)
-        minor_profile = torch.tensor([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17], device=self.device)
-        
-        best_key = 0
-        best_mode = "major"
-        max_corr = -1.0
-        
-        for k in range(12):
-            shifted_major = torch.roll(major_profile, shifts=k)
-            shifted_minor = torch.roll(minor_profile, shifts=k)
+        # 外部パラメータ (params) から指定されたキーがあればそれを最優先活用
+        best_key = None
+        best_mode = None
+        if params:
+            if "key_tonic" in params and "key_scale" in params:
+                tonic = params["key_tonic"]
+                scale = params["key_scale"].lower()
+                if tonic in self.pitch_classes:
+                    best_key = self.pitch_classes.index(tonic)
+                    best_mode = "major" if "major" in scale else "minor"
+            elif "estimated_key" in params:
+                parts = params["estimated_key"].split()
+                if len(parts) >= 2 and parts[0] in self.pitch_classes:
+                    best_key = self.pitch_classes.index(parts[0])
+                    best_mode = "major" if "major" in parts[1].lower() else "minor"
+
+        if best_key is None:
+            # 高精度 Pearson 相関による Krumhansl-Schmuckler プロファイルマッチング (生クロマの中心化)
+            mean_chroma_np = np.mean(chroma, axis=1)
+            mc = mean_chroma_np - np.mean(mean_chroma_np)
+            norm_mc = np.linalg.norm(mc)
             
-            corr_major = torch.dot(mean_chroma, shifted_major)
-            corr_minor = torch.dot(mean_chroma, shifted_minor)
+            major_prof = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+            minor_prof = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
+            major_prof = major_prof - np.mean(major_prof)
+            minor_prof = minor_prof - np.mean(minor_prof)
             
-            if corr_major > max_corr:
-                max_corr = corr_major
-                best_key = k
-                best_mode = "major"
-            if corr_minor > max_corr:
-                max_corr = corr_minor
-                best_key = k
-                best_mode = "minor"
+            best_r = -2.0
+            best_key = 0
+            best_mode = "major"
+            
+            for k in range(12):
+                rot_maj = np.roll(major_prof, k)
+                rot_min = np.roll(minor_prof, k)
+                
+                denom_maj = norm_mc * np.linalg.norm(rot_maj)
+                r_maj = np.dot(mc, rot_maj) / denom_maj if denom_maj > 0 else -1.0
+                
+                denom_min = norm_mc * np.linalg.norm(rot_min)
+                r_min = np.dot(mc, rot_min) / denom_min if denom_min > 0 else -1.0
+                
+                if r_maj > best_r:
+                    best_r = r_maj
+                    best_key = k
+                    best_mode = "major"
+                if r_min > best_r:
+                    best_r = r_min
+                    best_key = k
+                    best_mode = "minor"
                 
         key_name = self.pitch_classes[best_key] + (" Major" if best_mode == "major" else " Minor")
         print(f"  - 曲全体の自動キー推定: {key_name} (ダイアトニック優遇を適用します)")
@@ -236,12 +262,39 @@ class ChordEstimationStrategy(IAnalysisStrategy):
         p_self = 0.96
         transition_matrix = np.zeros((n_states, n_states))
         
+        # 各調性におけるダイアトニック度数と許容サフィックスの定義
+        # Major: I(maj/M7), ii(m/m7), iii(m/m7), IV(maj/M7), V(maj/7), vi(m/m7), vii(dim)
+        diatonic_degrees_major = {
+            0: ["", "M7"],
+            2: ["m", "m7"],
+            4: ["m", "m7"],
+            5: ["", "M7"],
+            7: ["", "7"],
+            9: ["m", "m7"],
+            11: ["dim"]
+        }
+        # Minor: i(m/m7), ii(dim), III(maj/M7), iv(m/m7), v(m/7), VI(maj/M7), VII(maj/7)
+        diatonic_degrees_minor = {
+            0: ["m", "m7"],
+            2: ["dim"],
+            3: ["", "M7"],
+            5: ["m", "m7"],
+            7: ["m", "7"],
+            8: ["", "M7"],
+            10: ["", "7"]
+        }
+        deg_map = diatonic_degrees_major if best_mode == "major" else diatonic_degrees_minor
+
         is_diatonic = np.zeros(n_states, dtype=bool)
         for idx in range(n_states):
             root_pitch = self.chord_roots[idx]
-            chord_name = self.chord_names[idx]
-            if root_pitch in diatonic_roots and not ("(9)" in chord_name or "aug" in chord_name or "dim7" in chord_name):
-                is_diatonic[idx] = True
+            deg = (root_pitch - best_key) % 12
+            if deg in deg_map:
+                chord_name = self.chord_names[idx]
+                root_name = self.pitch_classes[root_pitch]
+                suffix = chord_name[len(root_name):]
+                if suffix in deg_map[deg]:
+                    is_diatonic[idx] = True
 
         for i in range(n_states):
             root_i = self.chord_roots[i]
@@ -283,11 +336,12 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                 if smoothed_chords[i-1] == smoothed_chords[i+1] and smoothed_chords[i] != smoothed_chords[i-1]:
                     smoothed_chords[i] = smoothed_chords[i-1]
 
-        # 10. 連続区間の圧縮
+        # 10. 連続区間の圧縮 (0.0秒〜楽曲末尾まで完全カバレッジ)
+        total_duration = float(len(signal.data) / sr)
         chords_sequence: List[Dict[str, Any]] = []
         if len(smoothed_chords) > 0:
             current_chord = smoothed_chords[0]
-            start_time = beat_times[0]
+            start_time = 0.0
             for i in range(1, len(smoothed_chords)):
                 if smoothed_chords[i] != current_chord:
                     chords_sequence.append({
@@ -300,13 +354,13 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                     
             chords_sequence.append({
                 "start_sec": round(float(start_time), 2),
-                "end_sec": round(float(beat_times[-1]), 2),
+                "end_sec": round(total_duration, 2),
                 "chord": current_chord
             })
             
-            # 楽曲冒頭の極小スパン (0.3秒未満の無音・立ち上がり過渡ノイズ) があれば直後の安定コードにマージ
+            # 楽曲冒頭の極小スパン (0.35秒未満の立ち上がり過渡ノイズ) があれば直後の安定コードにマージ
             if len(chords_sequence) > 1 and (chords_sequence[0]["end_sec"] - chords_sequence[0]["start_sec"]) < 0.35:
-                chords_sequence[1]["start_sec"] = chords_sequence[0]["start_sec"]
+                chords_sequence[1]["start_sec"] = 0.0
                 chords_sequence.pop(0)
             
         return {

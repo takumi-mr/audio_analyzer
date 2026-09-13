@@ -427,12 +427,12 @@ def run_benchmark(
     filters.append(CompressorFilter(target_key="target_drums_low", threshold=0.2, ratio=3.0))
 
     strategy_instances: List[IAnalysisStrategy] = []
-    if "chord" in strategies_to_eval:
-        strategy_instances.append(ChordEstimationStrategy())
     if "key" in strategies_to_eval:
         strategy_instances.append(KeyDetectionStrategy())
     if "beat" in strategies_to_eval:
         strategy_instances.append(SimpleBeatStrategy())
+    if "chord" in strategies_to_eval:
+        strategy_instances.append(ChordEstimationStrategy())
     if "chorus" in strategies_to_eval:
         strategy_instances.append(ChorusDetectionBeatSSMStrategy())
 
@@ -473,7 +473,7 @@ def run_benchmark(
             
             merged_result = {"status": "success"}
             for s in strategy_instances:
-                r = s.analyze(signals)
+                r = s.analyze(signals, params=merged_result)
                 for k, v in r.items():
                     if k != "status":
                         merged_result[k] = v
