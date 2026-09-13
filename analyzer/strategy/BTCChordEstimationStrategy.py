@@ -193,8 +193,8 @@ class BTCChordEstimationStrategy(IAnalysisStrategy):
                 hop_yin = 64
                 f0_bass = librosa.yin(
                     y_bass_down,
-                    fmin=librosa.note_to_hz('C1'), # 32.7 Hz
-                    fmax=librosa.note_to_hz('C4'), # 261.6 Hz
+                    fmin=float(librosa.note_to_hz('C1')), # 32.7 Hz
+                    fmax=float(librosa.note_to_hz('C4')), # 261.6 Hz
                     sr=sr_down,
                     hop_length=hop_yin
                 )

@@ -3,6 +3,7 @@ from typing import Any
 import librosa
 import numpy as np
 import scipy.ndimage
+import scipy.signal
 
 from analyzer.IAnalysisStrategy import IAnalysisStrategy
 from model.AudioSignal import AudioSignal
@@ -200,11 +201,14 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
                 else:
                     merged_sections.append(sec)
 
+            # 10. Foote Novelty Checkerboard Kernel によるセクション・小節境界スナップ
+            final_sections = self._snap_to_section_boundaries(merged_sections, beat_times, X, max_tol=0.8)
+
             return {
                 "status": "success",
                 "chorus_sections_beat_ssm": [
                     {"start_sec": round(s["start_sec"], 2), "end_sec": round(s["end_sec"], 2)}
-                    for s in merged_sections
+                    for s in final_sections
                 ],
                 "chorus_confidence_beat_ssm": round(float(np.max(chorus_score_smooth)), 2),
                 "chorus_method_beat_ssm": "beat_sync_path_enhanced"
@@ -303,3 +307,88 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
                 merged.append(sec)
                 
         return merged
+
+    def _compute_foote_novelty(self, X: np.ndarray, L: int = 4) -> np.ndarray:
+        """
+        2D Gaussian-tapered checkerboard kernel (Foote 2000) をビート同期自己類似行列 (SSM) の対角線上に畳み込み、
+        楽曲のセクション境界（イントロ/サビ/Aメロ/アウトロ等）を示す Foote Novelty カーブを算出します。
+        """
+        N = X.shape[1]
+        if N < 2 * L:
+            L = max(1, N // 4)
+        if L < 1:
+            return np.zeros(N)
+
+        norms = np.linalg.norm(X, axis=0, keepdims=True) + 1e-8
+        X_norm = X / norms
+        S = np.dot(X_norm.T, X_norm)
+
+        t = np.arange(-L, L)
+        i, j = np.meshgrid(t, t, indexing='ij')
+        sign_mat = np.where((i < 0) == (j < 0), 1.0, -1.0)
+        sigma = max(1.0, L / 2.0)
+        gauss = np.exp(-(i**2 + j**2) / (2.0 * sigma**2))
+        kernel = sign_mat * gauss
+        pos_mask = kernel > 0
+        neg_mask = kernel < 0
+        if np.any(pos_mask) and np.sum(kernel[pos_mask]) > 0:
+            kernel[pos_mask] /= np.sum(kernel[pos_mask])
+        if np.any(neg_mask) and np.abs(np.sum(kernel[neg_mask])) > 0:
+            kernel[neg_mask] /= np.abs(np.sum(kernel[neg_mask]))
+
+        S_pad = np.pad(S, L, mode='edge')
+        nov = np.zeros(N)
+        for n in range(N):
+            nov[n] = np.sum(S_pad[n : n + 2 * L, n : n + 2 * L] * kernel)
+        nov = np.clip(nov, 0.0, None)
+        ptp = np.ptp(nov)
+        if ptp > 0:
+            nov = (nov - np.min(nov)) / ptp
+        return nov
+
+    def _snap_to_section_boundaries(
+        self,
+        sections: list[dict[str, float]],
+        beat_times: np.ndarray,
+        X: np.ndarray,
+        max_tol: float = 0.8
+    ) -> list[dict[str, float]]:
+        """
+        Foote Novelty カーブのピーク（セクション境界）および音楽的小節境界（4拍周期）へ
+        サビ区間の start_sec / end_sec を吸着（スナップ）させて境界ジッターを解消します。
+        """
+        if not sections or len(beat_times) < 2:
+            return sections
+
+        n_beats = len(beat_times)
+        L = min(4, max(2, n_beats // 8))
+        nov = self._compute_foote_novelty(X, L=L)
+        pks, _ = scipy.signal.find_peaks(nov, prominence=0.10, distance=2)
+        foote_boundaries = [float(beat_times[p]) for p in pks if p < len(beat_times)]
+
+        # 4拍（1小節）周期の候補
+        bar_boundaries = [float(beat_times[b]) for b in range(0, n_beats, 4)]
+        if n_beats > 5:
+            bar_boundaries += [float(beat_times[b]) for b in range(1, n_beats, 4)]
+
+        candidate_boundaries = sorted(list(set(foote_boundaries + bar_boundaries)))
+
+        def snap(t_sec: float) -> float:
+            best = t_sec
+            min_diff = max_tol
+            for b in candidate_boundaries:
+                d = abs(t_sec - b)
+                if d < min_diff:
+                    min_diff = d
+                    best = b
+            return best
+
+        snapped = []
+        for sec in sections:
+            st = snap(sec["start_sec"])
+            et = snap(sec["end_sec"])
+            if et > st + 1.0:
+                snapped.append({"start_sec": st, "end_sec": et})
+            else:
+                snapped.append(sec)
+        return snapped

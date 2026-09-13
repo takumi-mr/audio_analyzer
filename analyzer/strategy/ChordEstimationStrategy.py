@@ -105,6 +105,11 @@ class ChordEstimationStrategy(IAnalysisStrategy):
         priors_list: list[float] = []
         self.chord_roots: list[int] = []
         
+        # 欠落音ペナルティ (Negative Chroma Matching) のための構成音マッピング
+        # 7thおよび9thコードにおいて、必須構成音（第7音、第9音）がクロマ上で欠落している場合にペナルティを適用
+        self.extra_pitch_map: dict[int, list[tuple[int, list[int]]]] = {} # chord_idx -> list of (extra_pitch, triad_pitches)
+        
+        chord_idx = 0
         for mode_name, intervals, suffix, prior in chord_types:
             for i in range(12):
                 template = np.zeros(12)
@@ -125,6 +130,19 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                 templates_list.append(template)
                 priors_list.append(prior)
                 self.chord_roots.append(i)
+                
+                # トライアド以上のテンション・セブンス構成音の登録
+                triad_pitches = [(i + intervals[k]) % 12 for k in range(min(3, len(intervals)))]
+                extras = []
+                if len(intervals) >= 4:
+                    p7 = (i + intervals[3]) % 12
+                    extras.append((p7, triad_pitches))
+                if len(intervals) >= 5:
+                    p9 = (i + intervals[4]) % 12
+                    extras.append((p9, triad_pitches))
+                if extras:
+                    self.extra_pitch_map[chord_idx] = extras
+                chord_idx += 1
                 
         self.templates: np.ndarray = np.array(templates_list)
         self.chord_priors: np.ndarray = np.array(priors_list)[:, np.newaxis]
@@ -255,8 +273,8 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                 hop_yin = 64
                 f0_bass = librosa.yin(
                     y_bass_down,
-                    fmin=librosa.note_to_hz('C1'),  # 32.7 Hz
-                    fmax=librosa.note_to_hz('C4'),  # 261.6 Hz
+                    fmin=float(librosa.note_to_hz('C1')),  # 32.7 Hz
+                    fmax=float(librosa.note_to_hz('C4')),  # 261.6 Hz
                     sr=sr_down,
                     hop_length=hop_yin
                 )
@@ -357,6 +375,22 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                 print("  - [Hybrid Fusion] SOTA BTC Transformer テンソル射影融合完了 (重み: 2.5)")
             except Exception as e:  # noqa: BLE001
                 print(f"  - [Warning: Hybrid Fusion] BTC融合処理フォールバック: {e}")
+
+        # ---- 5.6 【欠落音ペナルティ（Negative Chroma Matching / Missing 7th & Tension Penalty）】 ----
+        # トライアドとセブンス（M7, 7, m7等）の誤判定を防ぐため、
+        # セブンス構成音（第7音）やテンション（第9音）がクロマ上で欠落している場合にコード類似度にペナルティを課す
+        thresh_ratio = 0.36
+        lambda_absent = 0.35
+
+        for chord_c, extras in self.extra_pitch_map.items():
+            for p_extra, triad_pitches in extras:
+                e_r3 = torch.mean(chroma_norm[triad_pitches[:2], :], dim=0)
+                e_extra = chroma_norm[p_extra, :]
+                ratio = e_extra / (e_r3 + 1e-6)
+
+                # 必須音欠落ペナルティ: 第7音やテンションのエネルギー比が閾値未満なら類似度を急激に減衰
+                absence = torch.clamp((thresh_ratio - ratio) / thresh_ratio, min=0.0, max=1.0)
+                similarities[chord_c, :] -= lambda_absent * absence
 
         # ---- 6. 【キー検出とダイアトニック遷移の動的生成】 ----
         # 外部パラメータ (params) から指定されたキーがあればそれを最優先活用
