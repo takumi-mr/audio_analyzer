@@ -1,11 +1,14 @@
 import unittest
+
 import numpy as np
 import torch
-from model.AudioSignal import AudioSignal
-from model.btc.btc_model import BTC_model
-from model.btc.btc_loader import load_btc_model, get_btc_vocabulary
+
 from analyzer.strategy.BTCChordEstimationStrategy import BTCChordEstimationStrategy
 from analyzer.strategy.ChordEstimationStrategy import ChordEstimationStrategy
+from model.AudioSignal import AudioSignal
+from model.btc.btc_loader import get_btc_vocabulary
+from model.btc.btc_model import BTC_model
+
 
 class TestBTCChordRecognition(unittest.TestCase):
     def setUp(self):
@@ -13,8 +16,14 @@ class TestBTCChordRecognition(unittest.TestCase):
         self.duration = 4.0
         t = np.linspace(0, self.duration, int(self.sr * self.duration), endpoint=False)
         # C Major トライアド (C4=261.63Hz, E4=329.63Hz, G4=392.00Hz)
-        y = 0.3 * np.sin(2 * np.pi * 261.63 * t) + 0.3 * np.sin(2 * np.pi * 329.63 * t) + 0.3 * np.sin(2 * np.pi * 392.00 * t)
-        self.signal = AudioSignal(data=y, sample_rate=self.sr, duration_sec=self.duration)
+        y = (
+            0.3 * np.sin(2 * np.pi * 261.63 * t)
+            + 0.3 * np.sin(2 * np.pi * 329.63 * t)
+            + 0.3 * np.sin(2 * np.pi * 392.00 * t)
+        )
+        self.signal = AudioSignal(
+            data=y, sample_rate=self.sr, duration_sec=self.duration
+        )
 
     def test_btc_vocabulary(self):
         vocab = get_btc_vocabulary()
@@ -38,20 +47,20 @@ class TestBTCChordRecognition(unittest.TestCase):
 
     def test_btc_model_forward(self):
         cfg = {
-            'feature_size': 144,
-            'timestep': 108,
-            'num_chords': 170,
-            'input_dropout': 0.0,
-            'layer_dropout': 0.0,
-            'attention_dropout': 0.0,
-            'relu_dropout': 0.0,
-            'num_layers': 2,
-            'num_heads': 2,
-            'hidden_size': 32,
-            'total_key_depth': 32,
-            'total_value_depth': 32,
-            'filter_size': 32,
-            'probs_out': True
+            "feature_size": 144,
+            "timestep": 108,
+            "num_chords": 170,
+            "input_dropout": 0.0,
+            "layer_dropout": 0.0,
+            "attention_dropout": 0.0,
+            "relu_dropout": 0.0,
+            "num_layers": 2,
+            "num_heads": 2,
+            "hidden_size": 32,
+            "total_key_depth": 32,
+            "total_value_depth": 32,
+            "filter_size": 32,
+            "probs_out": True,
         }
         model = BTC_model(cfg)
         model.eval()
@@ -84,6 +93,7 @@ class TestBTCChordRecognition(unittest.TestCase):
         strat_heuristic = ChordEstimationStrategy(engine="heuristic")
         res_heuristic = strat_heuristic.analyze(signals)
         self.assertEqual(res_heuristic["status"], "success")
+
 
 if __name__ == "__main__":
     unittest.main()

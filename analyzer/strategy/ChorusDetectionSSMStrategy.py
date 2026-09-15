@@ -1,7 +1,9 @@
-import numpy as np
+from typing import Any
+
 import librosa
+import numpy as np
+
 from analyzer.IAnalysisStrategy import IAnalysisStrategy
-from typing import Dict, Any
 from model.AudioSignal import AudioSignal
 
 
@@ -20,11 +22,16 @@ class ChorusDetectionSSMStrategy(IAnalysisStrategy):
     - 結果は 'chorus_sections_ssm' キーで返す
     """
 
-    def analyze(self, signals: Dict[str, AudioSignal], params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def analyze(
+        self, signals: dict[str, AudioSignal], params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         # 全体シグナルを優先（構造解析はミックス全体で行う）
         signal = signals.get("target") or signals.get("target_vocal")
         if signal is None or len(signal.data) == 0:
-            return {"status": "error", "message": "No audio signal available for SSM chorus detection."}
+            return {
+                "status": "error",
+                "message": "No audio signal available for SSM chorus detection.",
+            }
 
         print("[Strategy: ChorusSSM] 自己類似行列(SSM) + ラグ変換で楽曲構造を解析中...")
 
@@ -38,9 +45,11 @@ class ChorusDetectionSSMStrategy(IAnalysisStrategy):
             if n_seconds < 8:
                 return {
                     "status": "success",
-                    "chorus_sections_ssm": [{"start_sec": 0.0, "end_sec": round(signal.duration_sec, 2)}],
+                    "chorus_sections_ssm": [
+                        {"start_sec": 0.0, "end_sec": round(signal.duration_sec, 2)}
+                    ],
                     "chorus_confidence_ssm": 0.5,
-                    "chorus_method_ssm": "ssm_segmentation"
+                    "chorus_method_ssm": "ssm_segmentation",
                 }
 
             # ---- 1. 特徴量行列の構築（クロマ + MFCC を連結） ----
@@ -65,14 +74,13 @@ class ChorusDetectionSSMStrategy(IAnalysisStrategy):
             # ---- 2. Self-Similarity Matrix (SSM) の構築 ----
             # width=5: より広い対角線帯を除去して「隣接が似ている」だけの秒を弾く
             R = librosa.segment.recurrence_matrix(
-                sec_features,
-                mode="affinity",
-                sym=True,
-                width=5
+                sec_features, mode="affinity", sym=True, width=5
             )
 
             # sparse → dense 変換
-            R_dense = np.asarray(R.todense()) if hasattr(R, "todense") else np.asarray(R)
+            R_dense = (
+                np.asarray(R.todense()) if hasattr(R, "todense") else np.asarray(R)
+            )
 
             # ---- 3. ラグ行列による繰り返し強度の強調 ----
             # SSM をラグドメインに変換すると、一定の「繰り返し間隔」を持つ区間が
@@ -143,21 +151,25 @@ class ChorusDetectionSSMStrategy(IAnalysisStrategy):
             sec_scores = [float(np.mean(chorus_scores[s:e])) for s, e in merged]
             best_idx = int(np.argmax(sec_scores))
 
-            chorus_sections = [{"start_sec": float(s), "end_sec": float(e)} for s, e in merged]
+            chorus_sections = [
+                {"start_sec": float(s), "end_sec": float(e)} for s, e in merged
+            ]
             chorus_sections.sort(key=lambda x: x["start_sec"])
 
             return {
                 "status": "success",
                 "chorus_sections_ssm": chorus_sections,
                 "chorus_confidence_ssm": round(sec_scores[best_idx], 3),
-                "chorus_method_ssm": "ssm_lag_segmentation"
+                "chorus_method_ssm": "ssm_lag_segmentation",
             }
 
         except Exception as e:
-            print(f"[Warning] SSM Chorus detection failed: {e}. Falling back to empty result.")
+            print(
+                f"[Warning] SSM Chorus detection failed: {e}. Falling back to empty result."
+            )
             return {
                 "status": "success",
                 "chorus_sections_ssm": [],
                 "chorus_confidence_ssm": 0.0,
-                "chorus_method_ssm": "ssm_lag_segmentation_fallback"
+                "chorus_method_ssm": "ssm_lag_segmentation_fallback",
             }

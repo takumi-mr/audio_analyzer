@@ -1,7 +1,9 @@
-import numpy as np
+from typing import Any
+
 import librosa
+import numpy as np
+
 from analyzer.IAnalysisStrategy import IAnalysisStrategy
-from typing import Dict, Any
 from model.AudioSignal import AudioSignal
 
 
@@ -13,13 +15,18 @@ class ChorusDetectionVocalStrategy(IAnalysisStrategy):
     - 結果は 'chorus_sections_vocal' キーで返す
     """
 
-    def analyze(self, signals: Dict[str, AudioSignal], params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def analyze(
+        self, signals: dict[str, AudioSignal], params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         # ボーカルシグナルを優先採用
         vocal = signals.get("target_vocal") or signals.get("target")
         full = signals.get("target") or vocal
 
         if vocal is None or len(vocal.data) == 0:
-            return {"status": "error", "message": "No audio signal available for vocal chorus detection."}
+            return {
+                "status": "error",
+                "message": "No audio signal available for vocal chorus detection.",
+            }
 
         print("[Strategy: ChorusVocal] ボーカル信号 + 適応閾値でサビ区間を検出中...")
 
@@ -34,9 +41,11 @@ class ChorusDetectionVocalStrategy(IAnalysisStrategy):
         if n_seconds < 5:
             return {
                 "status": "success",
-                "chorus_sections_vocal": [{"start_sec": 0.0, "end_sec": round(vocal.duration_sec, 2)}],
+                "chorus_sections_vocal": [
+                    {"start_sec": 0.0, "end_sec": round(vocal.duration_sec, 2)}
+                ],
                 "chorus_confidence_vocal": 0.5,
-                "chorus_method_vocal": "vocal+adaptive_threshold"
+                "chorus_method_vocal": "vocal+adaptive_threshold",
             }
 
         # ---- 特徴量の計算 ----
@@ -47,7 +56,9 @@ class ChorusDetectionVocalStrategy(IAnalysisStrategy):
         full_rms = librosa.feature.rms(y=y_full, hop_length=hop_length)[0]
 
         # 3. スペクトル重心（明るさ）
-        centroid = librosa.feature.spectral_centroid(y=y_full, sr=sr, hop_length=hop_length)[0]
+        centroid = librosa.feature.spectral_centroid(
+            y=y_full, sr=sr, hop_length=hop_length
+        )[0]
 
         # 1秒ごとの平均に平滑化
         sec_vocal_rms, sec_full_rms, sec_centroid = [], [], []
@@ -109,7 +120,11 @@ class ChorusDetectionVocalStrategy(IAnalysisStrategy):
         sec_chroma = []
         for s in range(n_seconds):
             sf, ef = s * frames_per_sec, (s + 1) * frames_per_sec
-            sec_chroma.append(np.mean(chroma[:, sf:ef], axis=1) if ef <= chroma.shape[1] else chroma[:, -1])
+            sec_chroma.append(
+                np.mean(chroma[:, sf:ef], axis=1)
+                if ef <= chroma.shape[1]
+                else chroma[:, -1]
+            )
         sec_chroma = np.array(sec_chroma)
 
         ref = np.mean(sec_chroma[best_start:best_end], axis=0)
@@ -118,12 +133,18 @@ class ChorusDetectionVocalStrategy(IAnalysisStrategy):
         if ref_norm > 0:
             for s in range(n_seconds - span):
                 if s + span <= best_start or s >= best_end:
-                    test = np.mean(sec_chroma[s:s + span], axis=0)
+                    test = np.mean(sec_chroma[s : s + span], axis=0)
                     t_norm = np.linalg.norm(test)
                     if t_norm > 0:
                         sim = np.dot(ref, test) / (ref_norm * t_norm)
-                        if sim > 0.90 and np.mean(sec_vocal_rms[s:s + span]) > np.mean(sec_vocal_rms) * 0.7:
-                            chorus_sections.append({"start_sec": float(s), "end_sec": float(s + span)})
+                        if (
+                            sim > 0.90
+                            and np.mean(sec_vocal_rms[s : s + span])
+                            > np.mean(sec_vocal_rms) * 0.7
+                        ):
+                            chorus_sections.append(
+                                {"start_sec": float(s), "end_sec": float(s + span)}
+                            )
                             break
 
         chorus_sections.sort(key=lambda x: x["start_sec"])
@@ -131,5 +152,5 @@ class ChorusDetectionVocalStrategy(IAnalysisStrategy):
             "status": "success",
             "chorus_sections_vocal": chorus_sections,
             "chorus_confidence_vocal": round(float(sec_scores[best_idx]), 2),
-            "chorus_method_vocal": "vocal+adaptive_threshold"
+            "chorus_method_vocal": "vocal+adaptive_threshold",
         }

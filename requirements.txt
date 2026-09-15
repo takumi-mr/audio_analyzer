@@ -9,3 +9,5 @@ demucs
 fastapi
 uvicorn
 python-multipart
+ruff>=0.16.0
+pyright>=1.1.0

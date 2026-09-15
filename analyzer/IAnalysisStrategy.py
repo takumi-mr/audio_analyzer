@@ -1,9 +1,14 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Any
+
 from model.AudioSignal import AudioSignal
+
 
 class IAnalysisStrategy(ABC):
     """音声解析の戦略インターフェース"""
+
     @abstractmethod
-    def analyze(self, signals: Dict[str, AudioSignal], params: Dict[str, Any] = None) -> Dict[str, Any]:
+    def analyze(
+        self, signals: dict[str, AudioSignal], params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         pass

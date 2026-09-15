@@ -1,0 +1,24 @@
+{
+    "venvPath": ".",
+    "venv": ".venv",
+    "include": [
+        "analyzer",
+        "model",
+        "reader",
+        "writer",
+        "main.py",
+        "server.py",
+        "tests",
+        "benchmarks"
+    ],
+    "exclude": [
+        "**/__pycache__",
+        ".venv",
+        "scratch",
+        "temp_uploads"
+    ],
+    "pythonVersion": "3.12",
+    "typeCheckingMode": "basic",
+    "reportMissingTypeStubs": false,
+    "reportMissingImports": "none"
+}

@@ -1,13 +1,15 @@
-import unittest
-import os
 import tempfile
-from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+import unittest
+from unittest.mock import patch
+
 import numpy as np
+from fastapi.testclient import TestClient
+
+from model.AudioSignal import AudioSignal
 
 # テストターゲット
 from server import app
-from model.AudioSignal import AudioSignal
+
 
 class TestAPI(unittest.TestCase):
     def setUp(self):
@@ -22,11 +24,9 @@ class TestAPI(unittest.TestCase):
     def test_analyze_audio_endpoint(self, mock_separator_apply, mock_reader_read):
         # 1. 各モックの構成
         sr = 22050
-        duration = 15.0 # サビ検出に必要な最低長 (16拍以上)
+        duration = 15.0  # サビ検出に必要な最低長 (16拍以上)
         dummy_signal = AudioSignal(
-            data=np.zeros(int(sr * duration)),
-            sample_rate=sr,
-            duration_sec=duration
+            data=np.zeros(int(sr * duration)), sample_rate=sr, duration_sec=duration
         )
         mock_reader_read.return_value = dummy_signal
 
@@ -39,20 +39,21 @@ class TestAPI(unittest.TestCase):
             res["target_bass"] = dummy_signal
             res["target_other"] = dummy_signal
             return res
+
         mock_separator_apply.side_effect = fake_apply
 
         # 2. ダミーファイルを送信
         dummy_file_content = b"RIFF....WAVEfmt ...."
-        
+
         response = self.client.post(
             "/api/analyze",
-            files={"file": ("test.wav", dummy_file_content, "audio/wav")}
+            files={"file": ("test.wav", dummy_file_content, "audio/wav")},
         )
-        
+
         # 3. アサーション
         self.assertEqual(response.status_code, 200)
         result = response.json()
-        
+
         self.assertEqual(result["status"], "success")
         self.assertIn("tempo_bpm", result)
         self.assertIn("estimated_key", result)
@@ -66,11 +67,11 @@ class TestAPI(unittest.TestCase):
 
     def test_unsupported_format(self):
         response = self.client.post(
-            "/api/analyze",
-            files={"file": ("test.txt", b"plain text", "text/plain")}
+            "/api/analyze", files={"file": ("test.txt", b"plain text", "text/plain")}
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("Unsupported file format", response.json()["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()
