@@ -330,7 +330,7 @@ def evaluate_source_separation(
 
     return results
 
-def scan_musdb_tracks(musdb_root: str, max_tracks: int | None = None) -> list[dict[str, Any]]:
+def scan_musdb_tracks(musdb_root: str, split: str = "all", max_tracks: int | None = None) -> list[dict[str, Any]]:
     """
     MUSDB18 / MUSDB18-HQ のディレクトリ構造をスキャンしてトラック情報を取得
     """
@@ -338,10 +338,16 @@ def scan_musdb_tracks(musdb_root: str, max_tracks: int | None = None) -> list[di
     if not os.path.exists(musdb_root):
         return tracks
 
+    scan_dir = musdb_root
+    if split in ["train", "test"]:
+        sub = os.path.join(musdb_root, split)
+        if os.path.exists(sub):
+            scan_dir = sub
+
     # 再帰的に mixture.wav または mixture.flac を探す
     candidates = []
     for ext in [".wav", ".flac", ".mp3"]:
-        candidates.extend(glob.glob(os.path.join(musdb_root, "**", f"mixture{ext}"), recursive=True))
+        candidates.extend(glob.glob(os.path.join(scan_dir, "**", f"mixture{ext}"), recursive=True))
 
     for mix_path in sorted(candidates):
         track_dir = os.path.dirname(mix_path)
@@ -385,6 +391,7 @@ class InMemoryWriter(IResultWriter):
 def run_benchmark(
     dataset_path: str | None = None,
     musdb_root: str | None = None,
+    split: str = "all",
     strategies_to_eval: list[str] | None = None,
     chord_engine: str = "hybrid",
     no_separation: bool = False,
@@ -401,9 +408,9 @@ def run_benchmark(
 
     if musdb_root:
         is_musdb_mode = True
-        data_items = scan_musdb_tracks(musdb_root, max_tracks=max_tracks)
+        data_items = scan_musdb_tracks(musdb_root, split=split, max_tracks=max_tracks)
         if not data_items:
-            raise FileNotFoundError(f"No MUSDB18 tracks (mixture.wav) found in: {musdb_root}")
+            raise FileNotFoundError(f"No MUSDB18 tracks (mixture.wav) found in: {musdb_root} (split={split})")
     elif dataset_path:
         if not os.path.exists(dataset_path):
             raise FileNotFoundError(f"Dataset file not found: {dataset_path}")
@@ -411,6 +418,10 @@ def run_benchmark(
             data_items = json.load(f)
         if not isinstance(data_items, list):
             data_items = [data_items]
+        if split and split.lower() in ["train", "test"]:
+            filtered = [d for d in data_items if d.get("split", "").lower() == split.lower()]
+            if filtered:
+                data_items = filtered
         if max_tracks:
             data_items = data_items[:max_tracks]
 
@@ -437,7 +448,7 @@ def run_benchmark(
     all_results = []
     print("\n=======================================================")
     print(f" 音声解析自動ベンチマーク実行開始 (全 {len(data_items)} 曲)")
-    print(f" モード: {'MUSDB18 Dataset' if is_musdb_mode else 'Custom Annotations'}")
+    print(f" モード: {'MUSDB18 Dataset' if is_musdb_mode else 'Custom Annotations'} | 分割: {split.upper()}")
     print(f" 評価項目: {strategies_to_eval} | 音源分離: {'OFF' if no_separation else 'ON'}")
     if musdb_separation:
         print(" 音源分離SDR評価: ON")
@@ -525,12 +536,12 @@ def run_benchmark(
         all_results.append(item_scores)
         print()
 
-    summary = compute_summary(all_results, strategies_to_eval, musdb_separation)
+    summary = compute_summary(all_results, strategies_to_eval, split=split, musdb_separation=musdb_separation)
     summary["chord_engine"] = chord_engine
     return {"summary": summary, "tracks": all_results, "chord_engine": chord_engine}
 
-def compute_summary(tracks: list[dict[str, Any]], strategies: list[str], musdb_separation: bool = False) -> dict[str, Any]:
-    summary: dict[str, Any] = {"track_count": len(tracks)}
+def compute_summary(tracks: list[dict[str, Any]], strategies: list[str], split: str = "all", musdb_separation: bool = False) -> dict[str, Any]:
+    summary: dict[str, Any] = {"track_count": len(tracks), "split": split}
 
     if not tracks:
         return summary
@@ -598,10 +609,11 @@ def compute_summary(tracks: list[dict[str, Any]], strategies: list[str], musdb_s
 
 def print_console_summary(benchmark_data: dict[str, Any]) -> None:
     summary = benchmark_data["summary"]
+    split_str = summary.get("split", "all").upper()
     print("=======================================================")
     print(" 総合ベンチマーク結果サマリー")
     print("=======================================================")
-    print(f" 評価楽曲数: {summary.get('track_count', 0)} 曲\n")
+    print(f" 評価楽曲数: {summary.get('track_count', 0)} 曲 [Split: {split_str}]\n")
 
     if "chord" in summary:
         c = summary["chord"]
@@ -648,9 +660,10 @@ def generate_markdown_report(benchmark_data: dict[str, Any], filepath: str) -> N
     tracks = benchmark_data["tracks"]
 
     engine_name = summary.get("chord_engine", "hybrid")
+    split_str = summary.get("split", "all").upper()
     lines = [
         "# 音声解析エンジン 自動ベンチマークレポート\n",
-        f"**評価楽曲総数**: {summary.get('track_count', 0)} 曲 | **コード認識エンジン**: `{engine_name}`\n",
+        f"**評価楽曲総数**: {summary.get('track_count', 0)} 曲 | **データセット分割**: `{split_str}` | **コード認識エンジン**: `{engine_name}`\n",
         "## 1. 総合スコアサマリー\n",
         "| 解析項目 | 指標 | スコア | 評価基準 |",
         "| :--- | :--- | :--- | :--- |"
@@ -726,6 +739,12 @@ def generate_markdown_report(benchmark_data: dict[str, Any], filepath: str) -> N
 def main():
     parser = argparse.ArgumentParser(description="Audio Analyzer 自動ベンチマーク評価スクリプト (MIR & MUSDB18対応)")
     parser.add_argument("-d", "--dataset", default="benchmarks/dataset.json", help="データセット定義JSONパス (デフォルト: benchmarks/dataset.json)")
+    parser.add_argument(
+        "--split",
+        choices=["train", "test", "all"],
+        default="all",
+        help="評価対象データセットの分割 (train: 開発・検証用, test: 最終評価用テストデータ, all: 全楽曲)"
+    )
     parser.add_argument("--musdb", help="MUSDB18 / MUSDB18-HQ 形式のデータセットルートフォルダパス")
     parser.add_argument("--musdb-separation", action="store_true", help="MUSDB18正解ステムとの音源分離精度評価 (SDR / 相関度) を実施")
     parser.add_argument("--max-tracks", type=int, help="評価する最大楽曲数")
@@ -758,6 +777,7 @@ def main():
     benchmark_data = run_benchmark(
         dataset_path=dataset_file,
         musdb_root=args.musdb,
+        split=args.split,
         strategies_to_eval=selected_strategies,
         chord_engine=args.chord_engine,
         no_separation=args.no_separation,

@@ -155,15 +155,27 @@ python server.py
 ### 基本実行
 
 ```bash
-# 組み込みサンプルデータセット (benchmarks/dataset.json) に対する自動スコアリング
-python benchmark.py
+# 未見の最終評価用テストデータセット (Test Split) に対する自動スコアリング
+python benchmark.py --split test
+
+# 開発・アルゴリズム検証用データセット (Train Split) に対する自動スコアリング
+python benchmark.py --split train
+
+# 全データセット (Train + Test 全4曲) を評価
+python benchmark.py --split all
 
 # 音源分離をスキップして高速実行
-python benchmark.py --no-separation
+python benchmark.py --split test --no-separation
 
 # レポートを Markdown ファイルに出力
-python benchmark.py -o benchmark_report.md
+python benchmark.py --split test -o benchmark_report.md
 ```
+
+#### データセット構成と過学習防止:
+- **`benchmarks/dataset_train.json` (Train)**: 開発・ハイパーパラメータ調整用データ（`Standard Dance Track`, `Complex Prog Rock`）。
+- **`benchmarks/dataset_test.json` (Test)**: アルゴリズムの過学習を防止・客観評価するための未見テストデータ（`Acoustic Pop Ballad`, `Neo-Soul City Funk`）。
+- **`benchmarks/dataset.json`**: 各アイテムに `"split": "train"` または `"split": "test"` を付与した統合データセット。
+- **音源の自動再合成**: `python benchmarks/generate_benchmark_audio.py` を実行することで、MUSDB18互換の4ステム完備マルチトラックWAVをいつでも完全再生成できます。
 
 #### 主な算出指標:
 - **コード進行 (WCSR)**: 秒単位の時間重み付き完全一致率 (Exact)、トライアド一致率 (Triad)、ルート音一致率 (Root)
