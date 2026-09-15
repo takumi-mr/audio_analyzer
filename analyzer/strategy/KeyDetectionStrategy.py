@@ -9,7 +9,8 @@ from model.AudioSignal import AudioSignal
 
 class KeyDetectionStrategy(IAnalysisStrategy):
     """
-    ベース成分の統合（target_bass）および低音クロマ（Bass Chroma）と高音クロマ（Treble Chroma）の2階層評価を用い、
+    ベース成分の統合（target_bass）、低音/高音2階層クロマ評価、
+    およびコード進行解析結果との音楽理論連動（Diatonic Fit / Cadence スコアリング）を用い、
     楽曲全体の主キー（調）を高精度に推定する戦略。
     """
 
@@ -41,6 +42,154 @@ class KeyDetectionStrategy(IAnalysisStrategy):
         # 平均を引いて正規化
         self.major_profile = self.major_profile - np.mean(self.major_profile)
         self.minor_profile = self.minor_profile - np.mean(self.minor_profile)
+
+    def _parse_chord_name(self, chord_str: str) -> tuple[int, str] | None:
+        """
+        コード名文字列（例: 'C', 'G7', 'Am', 'F#m7', 'Bb', 'N'）から
+        ルート音のピッチクラスインデックス (0~11) と 基本タイプ ('maj', 'min', 'dim') を返す。
+        """
+        if not chord_str or chord_str in ["N", "X"]:
+            return None
+
+        # スラッシュコード (オンコード: C/G など) の場合は分子コードを採用
+        base_chord = chord_str.split("/")[0].strip()
+        if not base_chord:
+            return None
+
+        enharmonics = {"Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#"}
+        root_name = ""
+        rest = ""
+
+        if len(base_chord) >= 2 and base_chord[1] in ["#", "b"]:
+            root_candidate = base_chord[:2]
+            root_name = enharmonics.get(root_candidate, root_candidate)
+            rest = base_chord[2:]
+        else:
+            root_name = base_chord[0]
+            rest = base_chord[1:]
+
+        if root_name not in self.pitch_classes:
+            return None
+
+        root_idx = self.pitch_classes.index(root_name)
+
+        # 品質（Quality）の分類
+        rest_lower = rest.lower()
+        if "min" in rest_lower or (rest.startswith("m") and not rest.startswith("maj")):
+            quality = "min"
+        elif "dim" in rest_lower or "hdim" in rest_lower or "m7-5" in rest_lower:
+            quality = "dim"
+        elif "aug" in rest_lower:
+            quality = "aug"
+        else:
+            quality = "maj"
+
+        return root_idx, quality
+
+    def _score_chords_for_keys(
+        self, chords: list[dict[str, Any]]
+    ) -> dict[tuple[int, str], float]:
+        """
+        推定されたコード進行列から各調 (12 Major + 12 Minor) の適合スコアを算出。
+        Diatonic Fit（構成音・機能和声一致度）および Cadence（V->I などの終止形）を評価。
+        """
+        scores: dict[tuple[int, str], float] = {
+            (i, mode): 0.0 for i in range(12) for mode in ["Major", "Minor"]
+        }
+        if not chords:
+            return scores
+
+        parsed_chords: list[tuple[int, str, float]] = []
+        total_duration = 0.0
+
+        for c_info in chords:
+            chord_name = c_info.get("chord", "")
+            duration = float(c_info.get("end_sec", 0.0) - c_info.get("start_sec", 0.0))
+            if duration <= 0.0:
+                duration = 1.0
+            parsed = self._parse_chord_name(chord_name)
+            if parsed is not None:
+                parsed_chords.append((parsed[0], parsed[1], duration))
+                total_duration += duration
+
+        if not parsed_chords or total_duration <= 0.0:
+            return scores
+
+        # 1. ダイアトニック適合度（Diatonic Fit）の積算
+        for root_idx, quality, dur in parsed_chords:
+            weight_dur = dur / total_duration
+
+            for tonic_idx in range(12):
+                interval = (root_idx - tonic_idx) % 12
+
+                # --- Major 調 ---
+                if interval == 0:
+                    score = 1.5 if quality == "maj" else -0.8
+                elif interval == 2:
+                    score = 1.0 if quality == "min" else 0.5
+                elif interval == 4:
+                    score = 0.9 if quality == "min" else 0.5
+                elif interval == 5:
+                    score = 1.3 if quality == "maj" else 0.3
+                elif interval == 7:
+                    score = 1.4 if quality == "maj" else -0.5
+                elif interval == 9:
+                    score = 1.2 if quality == "min" else 0.4
+                elif interval == 11:
+                    score = 0.8 if quality == "dim" else 0.2
+                elif interval == 10:
+                    score = 0.6 if quality == "maj" else 0.0
+                else:
+                    score = -0.4
+                scores[(tonic_idx, "Major")] += score * weight_dur
+
+                # --- Minor 調 ---
+                if interval == 0:
+                    score = 1.5 if quality == "min" else -0.8
+                elif interval == 2:
+                    score = 0.8 if quality == "dim" else 0.4
+                elif interval == 3:
+                    score = 1.2 if quality == "maj" else 0.2
+                elif interval == 5:
+                    score = 1.2 if quality == "min" else 0.2
+                elif interval == 7:
+                    score = 1.4
+                elif interval == 8:
+                    score = 1.1 if quality == "maj" else 0.3
+                elif interval == 10:
+                    score = 1.0 if quality == "maj" else 0.1
+                elif interval == 11:
+                    score = 0.8 if quality == "dim" else 0.2
+                else:
+                    score = -0.4
+                scores[(tonic_idx, "Minor")] += score * weight_dur
+
+        # 2. カデンツおよび定型コード進行（Cadence & Progression）のボーナス
+        n_chords = len(parsed_chords)
+        for idx in range(n_chords - 1):
+            r1, q1, _ = parsed_chords[idx]
+            r2, q2, _ = parsed_chords[idx + 1]
+
+            for tonic_idx in range(12):
+                int1 = (r1 - tonic_idx) % 12
+                int2 = (r2 - tonic_idx) % 12
+
+                # ドミナントモーション (V -> I / V -> i)
+                if int1 == 7 and int2 == 0:
+                    if q1 == "maj" and q2 == "maj":
+                        scores[(tonic_idx, "Major")] += 0.4
+                    if q2 == "min":
+                        scores[(tonic_idx, "Minor")] += 0.4
+
+                # サブドミナント終止 (IV -> I)
+                if int1 == 5 and int2 == 0 and q1 == "maj" and q2 == "maj":
+                    scores[(tonic_idx, "Major")] += 0.25
+
+                # 王道進行 (IV -> V -> iii -> vi) の推進力 (IV -> V)
+                if int1 == 5 and int2 == 7 and q1 == "maj" and q2 == "maj":
+                    scores[(tonic_idx, "Major")] += 0.25
+
+        return scores
 
     def analyze(
         self, signals: dict[str, AudioSignal], params: dict[str, Any] | None = None
@@ -150,11 +299,26 @@ class KeyDetectionStrategy(IAnalysisStrategy):
         )
         norm_full = mean_full - np.mean(mean_full)
 
+        # 4. コード進行情報の抽出（連携されている場合）
+        chord_theory_scores: dict[tuple[int, str], float] | None = None
+        chords_input = None
+        if params:
+            if "chords" in params and isinstance(params["chords"], list):
+                chords_input = params["chords"]
+            elif "chord" in params and isinstance(params["chord"], list):
+                chords_input = params["chord"]
+
+        if chords_input:
+            print(
+                f"[Strategy: Key] コード進行 ({len(chords_input)} 区間) から音楽理論適合度 (Diatonic Fit / Cadence) を算出中..."
+            )
+            chord_theory_scores = self._score_chords_for_keys(chords_input)
+
         best_score = -999.0
         best_key = ""
         best_mode = "Major"
 
-        # 4. 12音階 × 2モード (Major/Minor) の2階層スコアリング
+        # 5. 12音階 × 2モード (Major/Minor) のハイブリッドスコアリング
         for i in range(12):
             rotated_major = np.roll(self.major_profile, i)
             rotated_minor = np.roll(self.minor_profile, i)
@@ -201,14 +365,18 @@ class KeyDetectionStrategy(IAnalysisStrategy):
             r_min = 0.6 * r_full_min + 0.4 * r_tr_min
 
             # (2) 低音クロマによる主音（根音）・属音の支持度 (Bass Tonic Support)
-            # 一様分布なら 1.0 (1/12 * 12)。平均以上鳴っていれば > 1.0
             tonic_bass = float(norm_bass[i] * 12.0)
             dominant_bass = float(norm_bass[(i + 7) % 12] * 12.0)
             bass_support = 0.75 * (tonic_bass - 1.0) + 0.25 * (dominant_bass - 1.0)
 
-            # (3) 総合スコア統合: 和声相関 + 低音主音支持 (平行調・属調の決定打)
+            # (3) 総合スコア統合: 和声相関 + 低音主音支持
             score_maj = r_maj + 0.30 * bass_support
             score_min = r_min + 0.30 * bass_support
+
+            # (4) コード進行理論スコアの統合（利用可能な場合）
+            if chord_theory_scores:
+                score_maj += 0.45 * chord_theory_scores.get((i, "Major"), 0.0)
+                score_min += 0.45 * chord_theory_scores.get((i, "Minor"), 0.0)
 
             if score_maj > best_score:
                 best_score = score_maj

@@ -128,8 +128,8 @@ def main(cli_args: list[str] | None = None) -> None:
 
     selected_keys = list(args.strategies)
     if "all" in selected_keys:
-        # similarity 以外のすべてを有効化
-        selected_keys = ["beat", "key", "chord", "chorus-beat-ssm", "genre"]
+        # similarity 以外のすべてを有効化 (chord を key より前に実行して理論連携)
+        selected_keys = ["beat", "chord", "key", "chorus-beat-ssm", "genre"]
 
     # 重複排除（順序保持）
     seen: set = set()

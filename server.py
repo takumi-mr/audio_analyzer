@@ -127,8 +127,8 @@ async def analyze_audio(
         # サビ検出は3手法を並走させ、比較できるようにする
         strategies: list[IAnalysisStrategy] = [
             SimpleBeatStrategy(),
-            KeyDetectionStrategy(),
             ChordEstimationStrategy(engine=chord_engine or "hybrid"),
+            KeyDetectionStrategy(),
             ChorusDetectionStrategy(),  # 手法A: RMS + スペクトル重心
             ChorusDetectionVocalStrategy(),  # 手法B: ボーカル分離 + 適応閾値
             ChorusDetectionSSMStrategy(),  # 手法C: 自己類似行列(SSM)構造解析

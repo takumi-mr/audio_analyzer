@@ -72,9 +72,12 @@ class AudioAnalyzer:
 
         # 2. 複数戦略の順次解析と結果のマージ
         merged_result = {"status": "success"}
-        actual_params = params or {}
+        actual_params = dict(params) if params else {}
         for strategy in strategies:
-            result = strategy.analyze(signals, actual_params)
+            # これまでに蓄積された解析結果を context として strategy に提供
+            step_params = dict(actual_params)
+            step_params.update(merged_result)
+            result = strategy.analyze(signals, step_params)
 
             # 各結果のインテリジェントマージ
             for k, v in result.items():
