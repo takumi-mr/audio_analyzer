@@ -378,8 +378,11 @@ class ChordEstimationStrategy(IAnalysisStrategy):
 
         # ---- 5.6 【欠落音ペナルティ（Negative Chroma Matching / Missing 7th & Tension Penalty）】 ----
         # トライアドとセブンス（M7, 7, m7等）の誤判定を防ぐため、
-        # セブンス構成音（第7音）やテンション（第9音）がクロマ上で欠落している場合にコード類似度にペナルティを課す
-        thresh_ratio = 0.36
+        # セブンス構成音（第7音）やテンション（第9音）がクロマ上で欠落している場合にコード類似度にペナルティを課す。
+        # 固定閾値による過学習を防止するため、非コード構成音の背景エネルギーからビートごとのノイズフロア比率を動的算出。
+        sorted_chroma, _ = torch.sort(chroma_norm, dim=0)
+        # 各ビートにおいて下位6ピッチの中央値をバックグラウンドノイズフロアとして抽出
+        noise_floor_b = torch.median(sorted_chroma[:6, :], dim=0).values # (n_beats,)
         lambda_absent = 0.35
 
         for chord_c, extras in self.extra_pitch_map.items():
@@ -388,8 +391,12 @@ class ChordEstimationStrategy(IAnalysisStrategy):
                 e_extra = chroma_norm[p_extra, :]
                 ratio = e_extra / (e_r3 + 1e-6)
 
-                # 必須音欠落ペナルティ: 第7音やテンションのエネルギー比が閾値未満なら類似度を急激に減衰
-                absence = torch.clamp((thresh_ratio - ratio) / thresh_ratio, min=0.0, max=1.0)
+                # ビートごとのノイズフロアに応じた適応型閾値 (ノイズフロアが高い楽曲ほど閾値を自動引き上げ)
+                r_noise = noise_floor_b / (e_r3 + 1e-6)
+                thresh_adaptive = torch.clamp(0.28 + 1.2 * r_noise, min=0.32, max=0.52)
+
+                # 必須音欠落ペナルティ: 第7音やテンションのエネルギー比が適応閾値未満なら類似度を急激に減衰
+                absence = torch.clamp((thresh_adaptive - ratio) / thresh_adaptive, min=0.0, max=1.0)
                 similarities[chord_c, :] -= lambda_absent * absence
 
         # ---- 6. 【キー検出とダイアトニック遷移の動的生成】 ----

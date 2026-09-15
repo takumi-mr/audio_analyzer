@@ -201,8 +201,8 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
                 else:
                     merged_sections.append(sec)
 
-            # 10. Foote Novelty Checkerboard Kernel によるセクション・小節境界スナップ
-            final_sections = self._snap_to_section_boundaries(merged_sections, beat_times, X, max_tol=0.8)
+            # 10. Foote Novelty Checkerboard Kernel によるセクション・小節境界スナップ (BPM連動適応窓)
+            final_sections = self._snap_to_section_boundaries(merged_sections, beat_times, X)
 
             return {
                 "status": "success",
@@ -351,16 +351,27 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
         sections: list[dict[str, float]],
         beat_times: np.ndarray,
         X: np.ndarray,
-        max_tol: float = 0.8
+        max_tol: float | None = None
     ) -> list[dict[str, float]]:
         """
         Foote Novelty カーブのピーク（セクション境界）および音楽的小節境界（4拍周期）へ
         サビ区間の start_sec / end_sec を吸着（スナップ）させて境界ジッターを解消します。
+        許容窓 max_tol が未指定の場合は、楽曲の拍間隔（テンポ）に応じた BPM連動型適応窓を動的算出します。
         """
         if not sections or len(beat_times) < 2:
             return sections
 
         n_beats = len(beat_times)
+
+        # BPM連動型適応スナップ許容窓の計算 (1拍の長さに応じてスケール)
+        if max_tol is None:
+            beat_intervals = np.diff(beat_times)
+            median_beat_dur = float(np.median(beat_intervals)) if len(beat_intervals) > 0 else 0.5
+            # 1拍の約0.85倍（最小0.35秒〜最大1.2秒にリミット）
+            effective_tol = float(np.clip(0.85 * median_beat_dur, 0.35, 1.2))
+        else:
+            effective_tol = max_tol
+
         L = min(4, max(2, n_beats // 8))
         nov = self._compute_foote_novelty(X, L=L)
         pks, _ = scipy.signal.find_peaks(nov, prominence=0.10, distance=2)
@@ -375,7 +386,7 @@ class ChorusDetectionBeatSSMStrategy(IAnalysisStrategy):
 
         def snap(t_sec: float) -> float:
             best = t_sec
-            min_diff = max_tol
+            min_diff = effective_tol
             for b in candidate_boundaries:
                 d = abs(t_sec - b)
                 if d < min_diff:
